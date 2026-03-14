@@ -1,0 +1,223 @@
+---
+title: Basic Usage
+description: Learn the most common acpx commands and workflows for running AI coding agents
+---
+
+## Overview
+
+acpx provides a simple command-line interface for running AI coding agents through the Agent Client Protocol. This guide covers the essential commands you'll use most often.
+
+## Quick Start
+
+The simplest way to use acpx is to run an agent with a prompt:
+
+```bash
+acpx codex 'fix the tests'
+```
+
+This command:
+1. Uses the codex agent
+2. Finds or creates a session for your current directory
+3. Sends the prompt to the agent
+4. Streams the response back to you
+
+## Common Commands
+
+### Prompt Command
+
+There are two ways to send prompts to agents:
+
+<Tabs>
+  <Tab title="Implicit">
+    The most concise way - just specify the agent and your prompt:
+
+    ```bash
+    acpx codex 'find the flaky test and fix it'
+    ```
+
+    This is the recommended form for interactive use.
+  </Tab>
+  <Tab title="Explicit">
+    Use the `prompt` subcommand explicitly:
+
+    ```bash
+    acpx codex prompt 'find the flaky test and fix it'
+    ```
+
+    This form is clearer in scripts or documentation.
+  </Tab>
+</Tabs>
+
+### One-Shot Exec Command
+
+Use `exec` for stateless, one-time tasks that don't need session history:
+
+```bash
+acpx codex exec 'summarize this repo in 5 bullets'
+```
+
+The `exec` command:
+- Creates a temporary session
+- Runs your prompt once
+- Discards the session afterward
+- Perfect for quick questions or summaries
+
+<Note>
+  Use `prompt` for ongoing conversations and `exec` for one-off questions.
+</Note>
+
+## Working with Different Agents
+
+acpx supports multiple AI coding agents. Here are examples with the primary agents:
+
+<CodeGroup>
+```bash Pi
+acpx pi 'review recent changes'
+```
+
+```bash OpenClaw
+acpx openclaw 'refactor the auth module'
+```
+
+```bash Codex
+acpx codex 'fix the failing typecheck'
+```
+
+```bash Claude
+acpx claude 'implement input validation'
+```
+</CodeGroup>
+
+### Default Agent
+
+If you don't specify an agent, acpx defaults to codex:
+
+```bash
+acpx 'fix the tests'
+# Equivalent to:
+acpx codex 'fix the tests'
+```
+
+You can change the default agent in your [configuration](/guides/configuration).
+
+## Reading Prompts from Files and Stdin
+
+### From File
+
+Use `--file` (or `-f`) to read prompts from a file:
+
+```bash
+acpx codex --file prompt.md
+```
+
+You can also append additional context:
+
+```bash
+acpx codex --file prompt.md "also check for edge cases"
+```
+
+### From Stdin
+
+<Tabs>
+  <Tab title="Pipe">
+    Pipe content directly to acpx:
+
+    ```bash
+    echo 'triage failing tests' | acpx codex
+    ```
+
+    This works great in scripts and automation:
+
+    ```bash
+    cat task-description.txt | acpx codex
+    ```
+  </Tab>
+  <Tab title="Explicit">
+    Use `--file -` for explicit stdin mode:
+
+    ```bash
+    acpx codex --file - "also check lint warnings"
+    ```
+
+    This reads from stdin and appends the additional arguments.
+  </Tab>
+</Tabs>
+
+## Real-World Example
+
+Here's a complete example showing acpx in action:
+
+```bash
+$ acpx codex sessions new
+$ acpx codex "find the flaky test and fix it"
+
+[thinking] Investigating test suite for flaky failures
+
+[tool] Run npm test -- --reporter=verbose (running)
+[tool] Run npm test -- --reporter=verbose (completed)
+  output:
+    ✓ auth.login (0.8s)
+    ✗ checkout.submit (timed out after 5000ms)
+    ✓ cart.add (0.3s)
+
+[thinking] Found it — checkout.submit has a race condition in the async setup
+
+[tool] Edit src/checkout.test.ts (completed)
+  output:
+    Success. Updated 1 file.
+
+[tool] Run npm test -- checkout.submit (completed)
+  output:
+    ✓ checkout.submit (0.4s)
+
+Fixed: added `await` to the setup hook in checkout.submit. The test was
+reading stale state from the previous run.
+
+[done] end_turn
+```
+
+## Understanding Output
+
+acpx shows you what the agent is doing in real-time:
+
+- **[thinking]**: The agent's reasoning process (summarized)
+- **[tool]**: Tool calls with status (running/completed/failed)
+- **[done]**: Final status with stop reason
+
+Assistant text appears without any prefix - it's the agent's direct response to you.
+
+## Cancel a Running Prompt
+
+Press `Ctrl+C` to cancel a running prompt:
+
+```bash
+acpx codex 'analyze the entire codebase'
+# Press Ctrl+C to cancel
+```
+
+Or use the cancel command from another terminal:
+
+```bash
+acpx codex cancel
+```
+
+<Note>
+  Cancellation is cooperative - acpx sends `session/cancel` to the agent, which may take a moment to respond gracefully.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Session Management" icon="layers" href="/guides/session-management">
+    Learn how to create and manage persistent sessions
+  </Card>
+  <Card title="Named Sessions" icon="tags" href="/guides/named-sessions">
+    Run parallel workstreams in the same repository
+  </Card>
+  <Card title="Output Formats" icon="code" href="/guides/output-formats">
+    Use JSON output for automation and scripting
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Customize acpx behavior with config files
+  </Card>
+</CardGroup>

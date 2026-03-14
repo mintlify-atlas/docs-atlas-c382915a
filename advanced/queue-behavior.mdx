@@ -1,0 +1,386 @@
+---
+title: Queue Behavior
+description: Deep dive into acpx's queue-owner process model, IPC mechanism, TTL behavior, and failure modes
+---
+
+## Overview
+
+acpx uses a queue-owner process model to coordinate multiple prompt submissions to the same session. When a prompt is already running, subsequent invocations don't spawn duplicate agent processes—they submit through local IPC to the running queue owner.
+
+## Queue Owner Process Model
+
+### How It Works
+
+When you submit a prompt to a session:
+
+1. **First invocation**: If no queue owner exists, the `acpx` process becomes the queue owner
+2. **Subsequent invocations**: Other `acpx` processes detect the running owner and submit via IPC
+3. **Queue draining**: The owner processes queued prompts one-by-one
+4. **Idle shutdown**: After the queue drains, the owner waits for new work up to TTL (default 300s)
+
+<Note>
+The queue owner keeps a single shared ACP client connection alive, avoiding repeated agent startup overhead.
+</Note>
+
+### Ownership Coordination
+
+Queue ownership is coordinated through:
+
+- **Lock file**: `~/.acpx/queues/<session-hash>.lock`
+- **Unix socket** (Unix-like): `~/.acpx/queues/<session-hash>.sock`
+- **Named pipe** (Windows): Similar coordination via named pipes
+
+The lock file contains:
+
+```json
+{
+  "pid": 12345,
+  "sessionId": "019c...",
+  "socketPath": "/home/user/.acpx/queues/abc123.sock",
+  "createdAt": "2026-03-14T01:30:00.000Z",
+  "heartbeatAt": "2026-03-14T01:35:00.000Z",
+  "ownerGeneration": 1710379800123,
+  "queueDepth": 2
+}
+```
+
+<Warning>
+Queue owner metadata includes a generation ID to detect stale owners from previous crashes.
+</Warning>
+
+## IPC Mechanism for Queued Prompts
+
+### Connection Protocol
+
+When submitting to a running owner:
+
+1. **Read lock file**: Parse owner metadata from `~/.acpx/queues/<hash>.lock`
+2. **Connect to socket**: Establish connection to the Unix socket path
+3. **Send request**: Write NDJSON request with `requestId`, `ownerGeneration`, and prompt details
+4. **Wait for acknowledgement**: Owner sends `{"type":"accepted"}` message
+5. **Stream results**: Owner forwards ACP events as NDJSON until completion
+
+### Request Format
+
+```typescript
+{
+  type: "submit_prompt",
+  requestId: "uuid",
+  ownerGeneration: 1710379800123,
+  message: "fix the tests",
+  prompt: { /* PromptInput */ },
+  permissionMode: "approve-reads",
+  timeoutMs: 120000,
+  waitForCompletion: true
+}
+```
+
+### Response Envelope
+
+The owner responds with:
+
+```typescript
+// Acknowledgement
+{"type":"accepted","requestId":"...","ownerGeneration":...}
+
+// ACP events
+{"type":"event","requestId":"...","message":{/* JSON-RPC */}}
+
+// Final result
+{"type":"result","requestId":"...","result":{"stopReason":"end_turn"}}
+
+// Or error
+{"type":"error","requestId":"...","code":"RUNTIME","message":"..."}
+```
+
+<Accordion title="Connection retry logic">
+If the socket isn't immediately available, acpx retries up to 40 times with 50ms delays (2 seconds total). This handles the brief window between queue owner startup and socket readiness.
+</Accordion>
+
+## TTL Behavior and `--ttl` Flag
+
+### Default TTL
+
+By default, queue owners use a **300-second (5-minute) TTL**:
+
+```bash
+acpx codex 'fix tests'  # owner stays alive 5min after completion
+```
+
+### Customizing TTL
+
+```bash
+# Keep owner alive for 30 seconds
+acpx --ttl 30 codex 'quick fix'
+
+# Keep owner alive indefinitely (no TTL)
+acpx --ttl 0 codex 'long-running work'
+
+# Override via config
+{
+  "ttl": 600  // 10 minutes
+}
+```
+
+### How TTL Works
+
+1. **After queue drains**: Owner enters idle state
+2. **Polling with timeout**: `nextTask(ttlMs)` blocks for up to TTL duration
+3. **New work arrives**: TTL resets; owner resumes processing
+4. **TTL expires**: Owner shuts down gracefully, releasing socket and lock
+
+<Note>
+`--ttl 0` disables TTL entirely—the owner waits indefinitely for new work.
+</Note>
+
+### First Task Extended TTL
+
+The first queued task uses a minimum 1-second poll timeout even if TTL is lower, ensuring the owner doesn't shut down immediately on startup.
+
+## Cancel Routing Through Queue IPC
+
+### Cancel Command
+
+```bash
+acpx codex cancel
+```
+
+When you cancel a running prompt:
+
+1. **Read owner metadata**: Load queue owner from lock file
+2. **Send cancel request**: `{"type":"cancel_prompt","requestId":"..."}`
+3. **Owner handles cancel**: Calls ACP `session/cancel` on active turn
+4. **Response**: `{"type":"cancel_result","cancelled":true}`
+
+### Cancel Request Flow
+
+```typescript
+// Request
+{
+  type: "cancel_prompt",
+  requestId: "uuid",
+  ownerGeneration: 1710379800123
+}
+
+// Response
+{
+  type: "cancel_result",
+  requestId: "uuid",
+  ownerGeneration: 1710379800123,
+  cancelled: true  // or false if nothing to cancel
+}
+```
+
+### Graceful Cancel on Interrupt
+
+When you press `Ctrl+C` during an active turn:
+
+1. **Trap SIGINT**: acpx catches the interrupt signal
+2. **Send session/cancel**: ACP client sends cooperative cancel
+3. **Wait briefly**: Up to 2.5 seconds for `stopReason=cancelled`
+4. **Force kill fallback**: Only if cancel doesn't complete in time
+
+<Warning>
+If the queue owner has no active prompt, `cancel` returns success with `"nothing to cancel"` message.
+</Warning>
+
+## `set-mode` and `set` Routing When Queue Is Active
+
+### Control Commands Via IPC
+
+Both `set-mode` and `set` route through queue IPC when an owner is active:
+
+```bash
+acpx codex set-mode auto
+acpx codex set thought_level high
+```
+
+### set-mode Request
+
+```typescript
+// Request
+{
+  type: "set_mode",
+  requestId: "uuid",
+  ownerGeneration: 1710379800123,
+  modeId: "auto",
+  timeoutMs: 30000
+}
+
+// Response
+{
+  type: "set_mode_result",
+  requestId: "uuid",
+  ownerGeneration: 1710379800123,
+  modeId: "auto"
+}
+```
+
+### set (set_config_option) Request
+
+```typescript
+// Request
+{
+  type: "set_config_option",
+  requestId: "uuid",
+  ownerGeneration: 1710379800123,
+  configId: "reasoning_effort",
+  value: "high",
+  timeoutMs: 30000
+}
+
+// Response
+{
+  type: "set_config_option_result",
+  requestId: "uuid",
+  ownerGeneration: 1710379800123,
+  response: { /* SetSessionConfigOptionResponse */ }
+}
+```
+
+### Fallback to Direct Connection
+
+If no queue owner is running:
+
+1. **Spawn temporary ACP client**
+2. **Load session** via `session/load` (or create if unsupported)
+3. **Apply setting** via `session/set_mode` or `session/set_config_option`
+4. **Update session record** with new preference
+5. **Close client**
+
+## Edge Cases and Failure Modes
+
+### Stale Owner Detection
+
+**Heartbeat timeout**: If heartbeat is older than 15 seconds, the owner is considered stale:
+
+```typescript
+const QUEUE_OWNER_STALE_HEARTBEAT_MS = 15_000;
+```
+
+Stale owners are terminated and cleaned up before acquiring new ownership.
+
+### Generation Mismatch
+
+If a request has a different `ownerGeneration` than the running owner:
+
+```json
+{
+  "type": "error",
+  "requestId": "...",
+  "detailCode": "QUEUE_OWNER_GENERATION_MISMATCH",
+  "message": "Queue request targeted a stale queue owner generation",
+  "retryable": true
+}
+```
+
+The client automatically cleans up stale metadata and retries.
+
+### Queue Overload
+
+**Max queue depth**: Default 16 queued tasks
+
+```json
+{
+  "type": "error",
+  "requestId": "...",
+  "detailCode": "QUEUE_OWNER_OVERLOADED",
+  "message": "Queue owner is overloaded (16/16 queued)",
+  "retryable": true
+}
+```
+
+### Owner Crash During Request
+
+If the owner crashes while processing:
+
+1. **Socket closes unexpectedly**
+2. **Client detects disconnect**: `QUEUE_DISCONNECTED_BEFORE_COMPLETION`
+3. **Cleanup stale owner**: Remove lock and socket files
+4. **Retry**: Spawn new owner and resubmit
+
+### Dead PID in Lock File
+
+Before connecting to an owner, acpx verifies the PID is alive:
+
+```typescript
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);  // signal 0 = liveness check
+    return true;
+  } catch {
+    return false;
+  }
+}
+```
+
+If dead, the lock is cleaned up and a new owner can start.
+
+### Protocol Version Mismatch
+
+If queue messages are malformed or unexpected:
+
+```json
+{
+  "type": "error",
+  "detailCode": "QUEUE_PROTOCOL_MALFORMED_MESSAGE",
+  "message": "Queue owner sent malformed message",
+  "retryable": true
+}
+```
+
+acpx automatically terminates stale owners with protocol mismatches.
+
+## Examples
+
+### Fire-and-Forget with `--no-wait`
+
+```bash
+acpx codex 'investigate test failures'
+acpx codex --no-wait 'draft summary when done'
+```
+
+The second command:
+1. Submits to the running owner
+2. Waits for `{"type":"accepted"}` acknowledgement
+3. Exits immediately without waiting for completion
+
+### Multiple Parallel Sessions
+
+```bash
+# Each named session has its own queue owner
+acpx codex -s backend 'fix API'
+acpx codex -s frontend 'update UI'
+```
+
+These run in separate queue owners (different session IDs).
+
+### Long-Running Owner
+
+```bash
+# Keep owner alive indefinitely for rapid iteration
+acpx --ttl 0 codex 'first task'
+acpx codex 'second task'  # reuses owner instantly
+acpx codex 'third task'   # still reusing
+```
+
+### Verbose Queue Logging
+
+```bash
+acpx --verbose codex 'task'
+```
+
+Output:
+```
+[acpx] queue owner ready for session 019c... (ttlMs=300000, maxQueueDepth=16)
+[acpx] queued prompt on active owner pid 12345 for session 019c...
+[acpx] queue owner stopped for session 019c...
+```
+
+## Implementation References
+
+- Queue IPC client: `src/queue-ipc.ts:673`
+- Queue server: `src/queue-ipc-server.ts:101`
+- Lock/lease management: `src/queue-lease-store.ts:235`
+- Owner spawning: `src/session-runtime/queue-owner-process.ts`
+- TTL normalization: `src/session-runtime.ts:378`

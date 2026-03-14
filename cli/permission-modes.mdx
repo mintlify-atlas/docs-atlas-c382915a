@@ -1,0 +1,231 @@
+---
+title: Permission Modes
+description: Control how acpx handles tool permission requests from agents
+---
+
+Permission modes control how acpx responds to agent tool requests. Choose the mode that matches your security requirements and workflow.
+
+## Available Modes
+
+<Note>
+  Permission flags are mutually exclusive. Using more than one of `--approve-all`, `--approve-reads`, or `--deny-all` will cause a usage error.
+</Note>
+
+### Approve All
+
+<ParamField path="--approve-all" type="boolean">
+  Auto-approve all permission requests
+  
+  Use this mode when you trust the agent completely and want maximum automation.
+</ParamField>
+
+**When to use:**
+- Trusted automation scripts
+- CI/CD pipelines where all operations are expected
+- Development workflows where you want to move fast
+
+**Example:**
+```bash
+acpx --approve-all codex 'apply this patch and run tests'
+acpx --approve-all codex 'fix the failing tests and commit the changes'
+```
+
+### Approve Reads (Default)
+
+<ParamField path="--approve-reads" type="boolean">
+  Auto-approve read/search requests, prompt for other operations
+  
+  This is the default permission mode. It automatically approves safe read and search operations but asks for confirmation before write, execute, or destructive operations.
+</ParamField>
+
+**Auto-approved tool kinds:**
+- `read` - Reading file contents
+- `search` - Searching or grepping files
+
+**Requires confirmation:**
+- `edit` - Writing or editing files
+- `delete` - Deleting files
+- `move` - Moving or renaming files
+- `execute` - Running commands
+- `fetch` - Network requests
+- `other` - Other operations
+
+**Example:**
+```bash
+acpx --approve-reads codex 'inspect the repo and propose a plan'
+acpx codex 'review the codebase and suggest improvements'  # default mode
+```
+
+**Interactive prompt:**
+```
+[permission] Allow Edit src/auth.ts [edit]? (y/N)
+```
+
+### Deny All
+
+<ParamField path="--deny-all" type="boolean">
+  Deny all permission requests
+  
+  Use this mode when you want the agent to analyze and plan without making any changes or running any tools.
+</ParamField>
+
+**When to use:**
+- Initial code review or analysis
+- Generating plans without execution
+- Testing agent behavior safely
+
+**Example:**
+```bash
+acpx --deny-all codex 'summarize this code without running tools'
+acpx --deny-all codex 'explain what you would do to fix this bug'
+```
+
+## Non-Interactive Behavior
+
+When acpx runs in a non-interactive environment (no TTY), it cannot show approval prompts. The `--non-interactive-permissions` flag controls what happens.
+
+<ParamField path="--non-interactive-permissions" type="enum" default="deny">
+  Policy when approval prompts cannot be shown
+  
+  **Values:**
+  - `deny` - Deny non-read/search requests (default)
+  - `fail` - Exit with `PERMISSION_PROMPT_UNAVAILABLE` error
+</ParamField>
+
+### Deny Policy (Default)
+
+In `--approve-reads` mode with no TTY, non-read/search requests are automatically denied:
+
+```bash
+# In CI/CD or piped context
+acpx codex 'fix the tests' < /dev/null
+# Write/execute requests are denied, but the command continues
+```
+
+### Fail Policy
+
+For stricter control, use `fail` to exit immediately when a prompt would be needed:
+
+```bash
+acpx --non-interactive-permissions fail codex 'fix the tests'
+# Exits with error if any non-read/search permission is requested
+```
+
+**Example in CI:**
+```bash
+# Fail fast if unexpected permissions are needed
+acpx --approve-reads --non-interactive-permissions fail codex 'review code'
+```
+
+## Permission Statistics
+
+When permissions are denied or cancelled, acpx tracks the statistics and includes them in the exit behavior:
+
+- If **no permissions were approved** and **at least one was denied/cancelled**, acpx exits with code `5`
+- If **some permissions were approved**, the command succeeds normally even if others were denied
+
+**Example:**
+```bash
+acpx --deny-all codex 'apply patch and run tests'
+# Exits with code 5 because all permission requests were denied
+```
+
+## Tool Kind Detection
+
+When agents don't specify an explicit tool `kind`, acpx infers it from the tool title:
+
+| Title Pattern | Inferred Kind |
+|--------------|---------------|
+| `read`, `cat` | `read` |
+| `search`, `find`, `grep` | `search` |
+| `write`, `edit`, `patch` | `edit` |
+| `delete`, `remove` | `delete` |
+| `move`, `rename` | `move` |
+| `run`, `execute`, `bash` | `execute` |
+| `fetch`, `http`, `url` | `fetch` |
+| `think` | `think` |
+| Other | `other` |
+
+This allows acpx to apply the correct permission policy even when agents send generic tool requests.
+
+## Practical Examples
+
+### Development Workflow
+
+```bash
+# Start with inspection (safe, read-only)
+acpx codex 'analyze the test failures'
+
+# Apply fixes with approval for each change
+acpx codex 'fix the auth test'
+# You'll be prompted before each file edit or command execution
+
+# If you trust the plan, approve everything
+acpx --approve-all codex 'apply the planned fixes'
+```
+
+### PR Review in CI
+
+```bash
+# Review only, no writes
+acpx --deny-all codex 'review this PR for security issues'
+
+# Generate analysis with strict failure on unexpected permissions
+acpx --approve-reads --non-interactive-permissions fail \
+  codex 'analyze test coverage'
+```
+
+### Parallel Named Sessions
+
+```bash
+# Safe exploration in one session
+acpx codex -s explore 'inspect the checkout flow'
+
+# Trusted automation in another session
+acpx --approve-all codex -s fixes 'apply all pending lint fixes'
+```
+
+## Configuration
+
+You can set a default permission mode in your config file:
+
+```json ~/.acpx/config.json
+{
+  "defaultPermissions": "approve-all",
+  "nonInteractivePermissions": "deny"
+}
+```
+
+CLI flags always override config values:
+
+```bash
+# Override config default
+acpx --deny-all codex 'review code'  # Uses deny-all even if config says approve-all
+```
+
+## Exit Codes
+
+Permission-related exit codes:
+
+| Code | Meaning |
+|------|----------|
+| `0` | Success |
+| `5` | Permission denied (no permissions approved, at least one denied/cancelled) |
+| `130` | Interrupted (SIGINT/SIGTERM) |
+
+**Example:**
+```bash
+acpx --deny-all codex 'fix the tests'
+echo $?  # 5 if permissions were requested and denied
+```
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Global Options" icon="flag" href="/cli/global-options">
+    See all command-line flags
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Learn about config file options
+  </Card>
+</CardGroup>

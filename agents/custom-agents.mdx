@@ -1,0 +1,293 @@
+---
+title: Custom Agents
+description: Integrating custom ACP servers with acpx
+---
+
+While `acpx` includes built-in support for popular agents, you can also use it with any ACP-compatible server through the `--agent` flag or config overrides.
+
+## The `--agent` Flag
+
+Use `--agent` to specify a custom ACP server command:
+
+```bash
+acpx --agent ./my-custom-acp-server "do something"
+```
+
+This bypasses the agent registry entirely and spawns the specified command directly.
+
+### Use Cases
+
+- **Local development**: Test custom ACP servers during development
+- **Experimental agents**: Try ACP servers that aren't in the built-in registry
+- **One-off configurations**: Use special flags or environments without config files
+
+### Examples
+
+```bash
+# Local development build
+acpx --agent ./bin/dev-acp --debug "test this feature"
+
+# Node.js server with custom args
+acpx --agent "node dev/agent.js --verbose" "review this code"
+
+# Python ACP server
+acpx --agent "python -m my_acp_server" "analyze the data"
+```
+
+<Note>
+The `--agent` flag expects a command that speaks the ACP protocol over stdio. Make sure your custom server implements the ACP spec.
+</Note>
+
+## Adding Custom Agents to Config
+
+For frequently-used custom agents, add them to your config file instead of using `--agent` every time.
+
+### Global Config
+
+Edit `~/.acpx/config.json`:
+
+```json
+{
+  "agents": {
+    "my-agent": {
+      "command": "./bin/my-acp-server"
+    },
+    "experimental": {
+      "command": "npx experimental-acp@canary"
+    }
+  }
+}
+```
+
+Now you can use them like built-in agents:
+
+```bash
+acpx my-agent "do something"
+acpx experimental "test new features"
+```
+
+### Project Config
+
+Create `.acpxrc.json` in your project root:
+
+```json
+{
+  "agents": {
+    "local-dev": {
+      "command": "node scripts/acp-server.js"
+    }
+  }
+}
+```
+
+Project config overrides global config for the same agent name.
+
+## Overriding Built-in Agents
+
+You can override built-in agent commands for local development or customization.
+
+### Example: Local OpenClaw Development
+
+When developing OpenClaw locally, you may want to bypass the production `openclaw acp` wrapper:
+
+```json
+{
+  "agents": {
+    "openclaw": {
+      "command": "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 node scripts/run-node.mjs acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main"
+    }
+  }
+}
+```
+
+Now `acpx openclaw ...` will use your local development build.
+
+<Warning>
+Overriding built-in agents affects all sessions for that agent. Make sure the custom command is stable and ACP-compatible.
+</Warning>
+
+### Example: Custom Adapter Versions
+
+Pin a specific adapter version or use a local fork:
+
+```json
+{
+  "agents": {
+    "codex": {
+      "command": "npx @my-org/codex-acp@1.2.3"
+    },
+    "claude": {
+      "command": "node ~/dev/claude-acp/dist/index.js"
+    }
+  }
+}
+```
+
+## What Makes a Valid ACP Server
+
+For a custom server to work with `acpx`, it must:
+
+1. **Communicate over stdio**: Read ACP requests from stdin, write responses to stdout
+2. **Implement the ACP spec**: Support required ACP methods like `session/new`, `session/load`, `session/send_prompt`
+3. **Follow the protocol lifecycle**: Handle initialization, prompt submission, and cancellation correctly
+4. **Return structured messages**: Emit ACP-compliant JSON-RPC messages
+
+### Minimal ACP Server Example (Conceptual)
+
+```javascript
+// Pseudo-code for a minimal ACP server
+import { ACPServer } from 'acp-sdk';
+
+const server = new ACPServer();
+
+server.on('session/new', async (params) => {
+  // Initialize a new session
+  return { sessionId: generateId(), status: 'ready' };
+});
+
+server.on('session/send_prompt', async (params) => {
+  // Process prompt and return response
+  const response = await processPrompt(params.text);
+  return { role: 'assistant', content: response };
+});
+
+server.listen(); // Read from stdin, write to stdout
+```
+
+<Note>
+This is illustrative. Refer to the [Agent Client Protocol spec](https://agentclientprotocol.com) for the full protocol definition.
+</Note>
+
+## Testing Custom Agents
+
+Before integrating a custom agent, test it standalone:
+
+```bash
+# Test your server responds to ACP messages
+echo '{"jsonrpc":"2.0","method":"session/new","params":{},"id":1}' | ./my-server
+```
+
+Then test with `acpx`:
+
+```bash
+# One-shot test
+acpx --agent ./my-server exec "hello"
+
+# Session test
+acpx --agent ./my-server sessions new
+acpx --agent ./my-server "test prompt"
+```
+
+## Agent Name Resolution Order
+
+When you run `acpx <name> ...`, the agent is resolved in this order:
+
+1. **`--agent` flag**: If provided, use it directly (highest priority)
+2. **Project config** (`.acpxrc.json`): Check `agents.<name>.command`
+3. **Global config** (`~/.acpx/config.json`): Check `agents.<name>.command`
+4. **Built-in registry**: Check if `<name>` is a built-in agent
+5. **Fallback**: Treat `<name>` as a literal command to spawn
+
+This allows you to override built-ins or define custom agents at any level.
+
+## Common Patterns
+
+### Development vs. Production Agents
+
+Use project config for development overrides:
+
+```json
+// .acpxrc.json (project)
+{
+  "agents": {
+    "codex": {
+      "command": "node ~/dev/codex-acp/index.js"
+    }
+  }
+}
+```
+
+Global config remains unchanged for production use.
+
+### Multiple Custom Agents
+
+Define several custom agents for different tasks:
+
+```json
+{
+  "agents": {
+    "qa-agent": { "command": "npx qa-acp" },
+    "docs-agent": { "command": "npx docs-acp" },
+    "refactor-agent": { "command": "./bin/refactor-acp" }
+  }
+}
+```
+
+Use them like built-ins:
+
+```bash
+acpx qa-agent "review test coverage"
+acpx docs-agent "update API docs"
+acpx refactor-agent "extract service layer"
+```
+
+### Environment-Specific Commands
+
+Use environment variables in agent commands:
+
+```json
+{
+  "agents": {
+    "staging-agent": {
+      "command": "env API_ENV=staging node bin/acp-server.js"
+    }
+  }
+}
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Custom agent won't start">
+    Verify the command works standalone:
+    ```bash
+    ./my-custom-acp-server --help
+    ```
+    Check that it reads from stdin and writes to stdout.
+  </Accordion>
+
+  <Accordion title="Protocol errors">
+    Ensure your server implements the required ACP methods:
+    - `session/new`
+    - `session/load`
+    - `session/send_prompt`
+    - `session/cancel`
+    
+    Refer to the [ACP spec](https://agentclientprotocol.com) for details.
+  </Accordion>
+
+  <Accordion title="Config not recognized">
+    Check your config syntax:
+    ```bash
+    acpx config show
+    ```
+    Make sure the agent name is lowercase and the command is a valid string.
+  </Accordion>
+</AccordionGroup>
+
+## Related Links
+
+<CardGroup cols={2}>
+  <Card title="ACP Spec" icon="book" href="https://agentclientprotocol.com">
+    Official Agent Client Protocol specification
+  </Card>
+  <Card title="Configuration Guide" icon="gear" href="/guides/configuration">
+    Learn about config files
+  </Card>
+  <Card title="Built-in Agents" icon="robot" href="/agents/overview">
+    See all built-in agents
+  </Card>
+  <Card title="Agent Client Protocol" icon="plug" href="/concepts/agent-client-protocol">
+    Understanding ACP in acpx
+  </Card>
+</CardGroup>

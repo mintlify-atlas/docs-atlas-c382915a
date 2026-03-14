@@ -1,0 +1,218 @@
+---
+title: Global Options
+description: Command-line flags that apply to all acpx commands
+---
+
+Global options can be used with any acpx command and control fundamental behavior like permissions, output format, and agent selection.
+
+## Option Precedence
+
+Configuration values are resolved in the following order (later values override earlier ones):
+
+1. Global config file (`~/.acpx/config.json`)
+2. Project config file (`<cwd>/.acpxrc.json`)
+3. Command-line flags (highest priority)
+
+CLI flags always override config file values.
+
+## Core Options
+
+### Agent Selection
+
+<ParamField path="--agent" type="string">
+  Raw ACP agent command (escape hatch)
+  
+  Use this to specify a custom agent command that isn't in the built-in registry. Do not combine with a positional agent token.
+  
+  ```bash
+  acpx --agent ./my-custom-acp-server 'do something'
+  acpx --agent 'node ./scripts/acp-dev-server.mjs --mode ci' exec 'summarize changes'
+  ```
+  
+  <Warning>
+    The resolved command string becomes the session scope key. Invalid empty commands or unterminated quoting will cause a usage error.
+  </Warning>
+</ParamField>
+
+### Working Directory
+
+<ParamField path="--cwd" type="string" default="process.cwd()">
+  Working directory for the command
+  
+  Defaults to the current directory. The path is stored as an absolute path for session scoping.
+  
+  ```bash
+  acpx --cwd ~/repos/api codex 'review auth middleware'
+  acpx --cwd ~/repos/backend codex 'review recent auth changes'
+  ```
+</ParamField>
+
+## Timeout and Lifecycle
+
+<ParamField path="--timeout" type="number">
+  Maximum time to wait for agent response (in seconds)
+  
+  Must be a positive number. Decimal seconds are allowed.
+  
+  ```bash
+  acpx --timeout 120 codex 'investigate flaky test failures'
+  acpx --timeout 90 codex 'investigate intermittent test timeout'
+  ```
+  
+  When the timeout is exceeded, acpx exits with code `3`.
+</ParamField>
+
+<ParamField path="--ttl" type="number" default="300">
+  Queue owner idle TTL before shutdown (in seconds)
+  
+  Controls how long the queue owner process stays alive after completing a prompt. Set to `0` to disable the TTL and keep the queue owner alive indefinitely.
+  
+  ```bash
+  acpx --ttl 30 codex 'keep queue owner warm for quick follow-up'
+  acpx --ttl 0 codex 'keep queue owner alive indefinitely'
+  ```
+</ParamField>
+
+## Output Control
+
+<ParamField path="--format" type="enum" default="text">
+  Output format for command results
+  
+  **Values:**
+  - `text` - Human-readable stream with tool updates (default)
+  - `json` - Raw ACP NDJSON stream for automation
+  - `quiet` - Assistant text only
+  
+  ```bash
+  acpx --format text codex 'summarize your findings'
+  acpx --format json codex exec 'review changed files'
+  acpx --format quiet codex 'final recommendation only'
+  ```
+  
+  See [Output Formats](/cli/output-formats) for detailed examples.
+</ParamField>
+
+<ParamField path="--json-strict" type="boolean">
+  Strict JSON mode (requires `--format json`)
+  
+  Suppresses non-JSON stderr output. Cannot be combined with `--verbose`.
+  
+  ```bash
+  acpx --format json --json-strict codex exec 'machine-safe JSON output'
+  ```
+  
+  <Warning>
+    This flag requires `--format json` and cannot be used with `--verbose`.
+  </Warning>
+</ParamField>
+
+<ParamField path="--verbose" type="boolean">
+  Enable verbose debug logs
+  
+  Prints ACP protocol details and debug information to stderr.
+  
+  ```bash
+  acpx --verbose codex 'debug adapter startup issues'
+  ```
+  
+  Cannot be combined with `--json-strict`.
+</ParamField>
+
+## Permission Modes
+
+<Note>
+  Permission flags are mutually exclusive. Using more than one of `--approve-all`, `--approve-reads`, or `--deny-all` is a usage error.
+</Note>
+
+<ParamField path="--approve-all" type="boolean">
+  Auto-approve all permission requests
+  
+  ```bash
+  acpx --approve-all codex 'apply this patch and run tests'
+  acpx --approve-all codex 'apply the patch and run tests'
+  ```
+  
+  See [Permission Modes](/cli/permission-modes) for detailed behavior.
+</ParamField>
+
+<ParamField path="--approve-reads" type="boolean">
+  Auto-approve read/search requests, prompt for others (default mode)
+  
+  ```bash
+  acpx --approve-reads codex 'inspect the repo and propose a plan'
+  acpx --approve-reads codex 'inspect repo structure and suggest plan'
+  ```
+</ParamField>
+
+<ParamField path="--deny-all" type="boolean">
+  Deny all permission requests
+  
+  ```bash
+  acpx --deny-all codex 'summarize this code without running tools'
+  acpx --deny-all codex 'explain what you can do without tool access'
+  ```
+</ParamField>
+
+<ParamField path="--non-interactive-permissions" type="enum" default="deny">
+  Policy when approval prompts cannot be shown (non-TTY environment)
+  
+  **Values:**
+  - `deny` - Deny non-read/search prompts when no TTY (default)
+  - `fail` - Fail with `PERMISSION_PROMPT_UNAVAILABLE` error
+  
+  ```bash
+  acpx --non-interactive-permissions fail codex 'fail fast when prompt cannot be shown'
+  acpx --non-interactive-permissions fail codex 'fail instead of deny in non-TTY'
+  ```
+  
+  See [Permission Modes](/cli/permission-modes) for details on when this applies.
+</ParamField>
+
+## Complete Examples
+
+### Development Workflow
+
+```bash
+# Auto-approve all permissions for quick iteration
+acpx --approve-all codex 'apply this patch and run tests'
+
+# Use a specific working directory
+acpx --cwd ~/repos/shop codex 'review auth middleware'
+
+# Set a longer timeout for complex operations
+acpx --timeout 120 codex 'investigate flaky test failures'
+```
+
+### CI/CD Pipeline
+
+```bash
+# JSON output for automation
+acpx --format json codex exec 'review latest diff for security issues'
+
+# Strict JSON mode with no stderr noise
+acpx --format json --json-strict codex exec 'machine-safe JSON output'
+
+# Fail on permission prompts in non-interactive environments
+acpx --non-interactive-permissions fail codex 'fail fast when prompt cannot be shown'
+```
+
+### Custom Agents
+
+```bash
+# Use a local development ACP server
+acpx --agent ./my-custom-acp-server 'do something'
+
+# Run a custom agent with specific configuration
+acpx --agent 'node ./scripts/acp-dev-server.mjs --mode ci' exec 'summarize changes'
+```
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Permission Modes" icon="shield-check" href="/cli/permission-modes">
+    Learn about permission control strategies
+  </Card>
+  <Card title="Output Formats" icon="file-code" href="/cli/output-formats">
+    Understand text, JSON, and quiet output modes
+  </Card>
+</CardGroup>

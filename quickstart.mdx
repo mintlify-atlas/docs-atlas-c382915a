@@ -1,80 +1,485 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with acpx in minutes - from installation to your first working agent session
 ---
 
-## Get started in three steps
+# Quickstart Guide
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+This guide will get you from zero to a working acpx session in minutes. We'll create a session, run prompts, and explore the core workflows.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  This guide assumes you've already [installed acpx](/installation) and have at least one ACP-compatible agent installed.
 </Note>
+
+## Your First Session
+
+<Steps>
+  <Step title="Create a new session">
+    Navigate to a project directory and create a session:
+
+    ```bash
+    cd ~/my-project
+    acpx codex sessions new
+    ```
+
+    This creates a persistent session scoped to:
+    - The agent command (`codex`)
+    - The current directory (or nearest git root)
+    - An optional session name (we're using the default)
+
+    <Note>
+      Sessions are stored in `~/.acpx/sessions/` and persist across commands.
+    </Note>
+  </Step>
+
+  <Step title="Send your first prompt">
+    Now ask the agent to do something:
+
+    ```bash
+    acpx codex "what files are in this directory?"
+    ```
+
+    You'll see structured output showing:
+    - **[thinking]**: The agent's reasoning process
+    - **[tool]**: Tool calls (reading files, running commands, etc.)
+    - **Final response**: The agent's answer
+
+    Example output:
+    ```bash
+    [thinking] I'll list the files in the current directory
+
+    [tool] Read directory . (completed)
+      output:
+        package.json
+        src/
+        README.md
+        tsconfig.json
+
+    This directory contains a Node.js project with:
+    - package.json for dependencies
+    - src/ folder with source code
+    - README.md documentation
+    - tsconfig.json TypeScript configuration
+
+    [done] end_turn
+    ```
+  </Step>
+
+  <Step title="Continue the conversation">
+    The session persists, so you can build on previous context:
+
+    ```bash
+    acpx codex "read the package.json and tell me what this project does"
+    ```
+
+    The agent remembers the previous turn and has context about the files.
+  </Step>
+</Steps>
+
+## Common Workflows
+
+### One-Shot Commands (No Session)
+
+For quick, stateless tasks, use `exec`:
+
+```bash
+acpx codex exec "summarize this repository"
+```
+
+This runs a single prompt without creating or reusing a persistent session.
+
+### Prompt from File or Stdin
+
+Read prompt content from a file:
+
+```bash
+acpx codex --file prompt.md
+```
+
+Or pipe from stdin:
+
+```bash
+echo "fix the failing tests" | acpx codex
+```
+
+Or use explicit stdin with additional context:
+
+```bash
+cat issue-description.txt | acpx codex --file - "also add tests"
+```
+
+### Parallel Named Sessions
+
+Work on multiple streams in the same repository:
+
+```bash
+# Create named sessions
+acpx codex sessions new --name api
+acpx codex sessions new --name frontend
+acpx codex sessions new --name docs
+
+# Work in parallel
+acpx codex -s api "implement user authentication endpoint"
+acpx codex -s frontend "update login form to use new API"
+acpx codex -s docs "document the authentication flow"
+```
+
+Each named session maintains separate conversation history.
+
+### Fire and Forget
+
+Queue a prompt without waiting for completion:
+
+```bash
+acpx codex "run the full test suite"
+acpx codex --no-wait "fix any failures"  # Returns immediately
+```
+
+The second prompt is queued and will run after the first completes.
+
+### Cooperative Cancellation
+
+Cancel an in-flight prompt gracefully:
+
+```bash
+# In another terminal (or Ctrl+C in the running terminal)
+acpx codex cancel
+```
+
+This sends ACP `session/cancel` without destroying session state.
+
+## Managing Sessions
+
+### List Sessions
+
+See all sessions for the current agent:
+
+```bash
+acpx codex sessions list
+```
+
+Example output:
+```bash
+3 sessions for codex:
+  /home/user/project-a (default)
+  /home/user/project-a (api)
+  /home/user/project-b (default)
+```
+
+### Inspect Session
+
+View metadata about the current session:
+
+```bash
+acpx codex sessions show
+```
+
+For a named session:
+
+```bash
+acpx codex sessions show api
+```
+
+### View Session History
+
+See recent conversation turns:
+
+```bash
+acpx codex sessions history --limit 5
+```
+
+### Close Session
+
+Soft-close a session (keeps history, terminates process):
+
+```bash
+acpx codex sessions close
+```
+
+For a named session:
+
+```bash
+acpx codex sessions close api
+```
+
+### Ensure Session Exists
+
+Idempotent session creation (returns existing or creates new):
+
+```bash
+acpx codex sessions ensure
+acpx codex sessions ensure --name api
+```
+
+## Permission Modes
+
+Control what tools the agent can use:
+
+### Approve Reads (Default)
+
+Auto-approve reads and searches, prompt for other operations:
+
+```bash
+acpx codex "analyze the codebase structure"
+```
+
+### Approve All
+
+Auto-approve all tool permissions (use with caution):
+
+```bash
+acpx --approve-all codex "apply the patch and run tests"
+```
+
+### Deny All
+
+Deny all tool access:
+
+```bash
+acpx --deny-all codex "explain what this code does without reading files"
+```
+
+<Warning>
+  Permission flags apply to the entire session. Use `--approve-all` carefully in production environments.
+</Warning>
+
+## Output Formats
+
+### Text (Default)
+
+Human-readable streaming output:
+
+```bash
+acpx codex "review this PR"
+```
+
+### JSON
+
+Machine-readable NDJSON events:
+
+```bash
+acpx --format json codex exec "find TODO comments" | jq -r 'select(.type=="tool_call") | .title'
+```
+
+JSON events include correlation metadata:
+```json
+{
+  "eventVersion": 1,
+  "sessionId": "abc123",
+  "requestId": "req-42",
+  "seq": 7,
+  "stream": "prompt",
+  "type": "tool_call",
+  "title": "Read src/app.ts",
+  "status": "completed"
+}
+```
+
+### Quiet
+
+Final assistant text only:
+
+```bash
+acpx --format quiet codex "give me a 3-line summary"
+```
+
+### JSON Strict
+
+Suppresses non-JSON stderr output (requires `--format json`):
+
+```bash
+acpx --format json --json-strict codex exec "analyze test coverage"
+```
+
+## Working with Multiple Agents
+
+acpx works with any ACP-compatible agent. Switch agents by changing the command:
+
+```bash
+# Use Pi
+acpx pi "review recent changes"
+
+# Use OpenClaw
+acpx openclaw "summarize active session state"
+
+# Use Codex (default)
+acpx codex "fix the failing typecheck"
+
+# Use Claude
+acpx claude "refactor auth middleware"
+```
+
+Each agent maintains separate sessions scoped by agent command.
+
+## Advanced Configuration
+
+### Set Agent Mode
+
+Change the agent's operating mode:
+
+```bash
+acpx codex set-mode auto
+```
+
+Modes are adapter-defined. Common modes include `auto`, `manual`, `ask`.
+
+### Set Configuration Options
+
+Modify agent-specific config:
+
+```bash
+acpx codex set reasoning_effort high
+```
+
+For Codex compatibility:
+
+```bash
+acpx codex set thought_level high  # Alias for reasoning_effort
+```
+
+### Check Session Status
+
+See process status for the current session:
+
+```bash
+acpx codex status
+```
+
+Example output:
+```bash
+Session status:
+  State: running
+  PID: 12345
+  Uptime: 5m 23s
+  Last prompt: "run the test suite" (2m ago)
+```
+
+## Practical Examples
+
+### Review a Pull Request
+
+```bash
+acpx --cwd ~/repos/shop --approve-all codex -s pr-842 \
+  "Review PR #842 for regressions and propose a minimal fix"
+```
+
+### Parallel Development Streams
+
+```bash
+# Terminal 1: Work on bugfix
+acpx codex -s bugfix "isolate the flaky checkout test"
+
+# Terminal 2: Prepare release
+acpx codex -s release "draft release notes from recent commits"
+```
+
+### CI/CD Integration
+
+```bash
+# In your CI script
+acpx --format json --approve-all codex exec "run linter and fix all issues" \
+  | jq -r 'select(.type=="done") | .exitCode'
+```
+
+### Keep Queue Owner Warm
+
+For quick follow-up prompts, keep the queue owner alive:
+
+```bash
+acpx --ttl 30 codex "first task"
+# Within 30 seconds:
+acpx codex "quick follow-up"  # Reuses warm process
+```
+
+## Troubleshooting
+
+### Enable Verbose Logging
+
+```bash
+acpx --verbose codex "debug adapter startup"
+```
+
+### Force Session Reconnect
+
+If a session is stuck, close and recreate:
+
+```bash
+acpx codex sessions close
+acpx codex sessions new
+```
+
+### Custom Agent Command
+
+If the built-in agent mapping doesn't work:
+
+```bash
+acpx --agent ./path/to/my-acp-server "do something"
+```
+
+### Non-Interactive Permissions
+
+In CI/CD or non-TTY environments:
+
+```bash
+# Fail if permission prompt would appear
+acpx --non-interactive-permissions fail --approve-reads codex exec "review code"
+
+# Deny silently (default)
+acpx --non-interactive-permissions deny codex exec "review code"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="CLI Reference" icon="terminal" href="/cli/overview">
+    Complete reference for all commands and flags
+  </Card>
+  <Card title="Concepts" icon="book" href="/concepts/sessions">
+    Deep dive into sessions, queues, and permissions
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Advanced configuration and customization
+  </Card>
+  <Card title="Agents" icon="robot" href="/agents/overview">
+    Learn about supported agents and adapters
+  </Card>
+</CardGroup>
+
+## Quick Reference
+
+### Essential Commands
+
+```bash
+# Session management
+acpx codex sessions new              # Create new session
+acpx codex sessions ensure           # Get or create session
+acpx codex sessions list             # List all sessions
+acpx codex sessions show             # Inspect current session
+acpx codex sessions close            # Close session
+
+# Prompts
+acpx codex "prompt text"             # Run prompt
+acpx codex prompt "text"             # Explicit prompt command
+acpx codex exec "text"               # One-shot (no session)
+acpx codex --file prompt.md          # Prompt from file
+echo "text" | acpx codex             # Prompt from stdin
+
+# Session controls
+acpx codex cancel                    # Cancel in-flight prompt
+acpx codex status                    # Check session status
+acpx codex set-mode auto             # Change agent mode
+acpx codex set key value             # Set config option
+
+# Named sessions
+acpx codex -s name "prompt"          # Use named session
+acpx codex sessions new --name api   # Create named session
+
+# Output and permissions
+acpx --format json codex exec "..."  # JSON output
+acpx --approve-all codex "..."       # Approve all permissions
+acpx --deny-all codex "..."          # Deny all permissions
+
+# Configuration
+acpx config show                     # View config
+acpx config init                     # Create config template
+```

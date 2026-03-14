@@ -1,0 +1,230 @@
+---
+title: OpenClaw Agent
+description: Using OpenClaw ACP bridge with acpx
+---
+
+OpenClaw provides native ACP support through its built-in `acp` subcommand. `acpx` can communicate directly with OpenClaw without requiring an adapter.
+
+## Registry Information
+
+- **Built-in name**: `openclaw`
+- **Adapter**: native (`openclaw acp`)
+- **Upstream tool**: [OpenClaw ACP bridge](https://github.com/openclaw/openclaw)
+
+## Prerequisites
+
+You need OpenClaw installed and accessible in your PATH:
+
+```bash
+# Install OpenClaw according to upstream instructions
+# Visit: https://github.com/openclaw/openclaw
+```
+
+## Basic Usage
+
+### Create a Session
+
+```bash
+acpx openclaw sessions new
+```
+
+### Send a Prompt
+
+```bash
+acpx openclaw "find the flaky test and fix it"
+```
+
+### One-Shot Execution
+
+```bash
+acpx openclaw exec "summarize active session state"
+```
+
+## Example Workflows
+
+### Bug Investigation
+
+```bash
+# Create a dedicated bug session
+acpx openclaw sessions new --name bugfix
+
+# Investigate
+acpx openclaw -s bugfix "isolate the race condition in checkout.test.ts"
+
+# Apply fix
+acpx openclaw -s bugfix "add proper async setup and verify all tests pass"
+```
+
+### Parallel Workstreams
+
+```bash
+# Backend work
+acpx openclaw -s backend "review auth middleware changes"
+
+# Frontend work in parallel
+acpx openclaw -s frontend "update API client to match new auth flow"
+```
+
+## Configuration
+
+### Local Development Override
+
+For local OpenClaw development, you may want to bypass the wrapper scripts and invoke the ACP bridge directly:
+
+```json
+{
+  "agents": {
+    "openclaw": {
+      "command": "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 node scripts/run-node.mjs acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main"
+    }
+  }
+}
+```
+
+This is useful when:
+- You're developing OpenClaw locally
+- You want to reduce startup noise
+- You need fine-grained control over the ACP bridge invocation
+
+<Note>
+The example above assumes a specific OpenClaw project structure. Adjust paths and flags to match your local setup.
+</Note>
+
+### Permission Modes
+
+```bash
+# Auto-approve all operations
+acpx --approve-all openclaw "apply the patch"
+
+# Approve reads only (default)
+acpx --approve-reads openclaw "analyze the codebase"
+
+# Deny all operations
+acpx --deny-all openclaw "explain your capabilities"
+```
+
+## Session Management
+
+### List Sessions
+
+```bash
+acpx openclaw sessions list
+```
+
+### Inspect Current Session
+
+```bash
+acpx openclaw sessions show
+```
+
+### View History
+
+```bash
+acpx openclaw sessions history --limit 5
+```
+
+### Close Session
+
+```bash
+acpx openclaw sessions close
+```
+
+## Advanced Features
+
+### Named Sessions for Context Isolation
+
+OpenClaw sessions can maintain separate contexts for different tasks:
+
+```bash
+# Create a refactoring session
+acpx openclaw sessions new --name refactor
+acpx openclaw -s refactor "refactor payment processing module"
+
+# Create a docs session
+acpx openclaw sessions new --name docs
+acpx openclaw -s docs "update API documentation"
+```
+
+### Queue Management
+
+```bash
+# Queue a prompt without waiting
+acpx openclaw --no-wait "draft migration plan for v2 API"
+
+# Cancel in-flight prompt
+acpx openclaw cancel
+```
+
+### Fire-and-Forget with TTL
+
+```bash
+# Keep queue owner alive for 30s for follow-ups
+acpx --ttl 30 openclaw "review this PR"
+
+# Quick follow-up within TTL window
+acpx openclaw "check test coverage too"
+```
+
+## Output Formats
+
+### JSON Output
+
+```bash
+# Structured output for automation
+acpx --format json openclaw exec "list changed files" | jq
+```
+
+### Quiet Mode
+
+```bash
+# Final response only
+acpx --format quiet openclaw "give me a 3-line summary"
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="OpenClaw not found">
+    Verify OpenClaw is installed:
+    ```bash
+    which openclaw
+    openclaw --version
+    ```
+  </Accordion>
+
+  <Accordion title="ACP bridge fails to start">
+    Check if the `acp` subcommand is available:
+    ```bash
+    openclaw acp --help
+    ```
+    If not, update to a version that supports ACP.
+  </Accordion>
+
+  <Accordion title="Session crashes on reconnect">
+    Check process status:
+    ```bash
+    acpx openclaw status
+    ```
+    If the agent process is dead, create a fresh session:
+    ```bash
+    acpx openclaw sessions new
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related Links
+
+<CardGroup cols={2}>
+  <Card title="OpenClaw Repository" icon="github" href="https://github.com/openclaw/openclaw">
+    Upstream OpenClaw project
+  </Card>
+  <Card title="Named Sessions" icon="folder-tree" href="/guides/named-sessions">
+    Learn about parallel sessions
+  </Card>
+  <Card title="Queue Behavior" icon="list-timeline" href="/advanced/queue-behavior">
+    Understanding prompt queues
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Config file reference
+  </Card>
+</CardGroup>

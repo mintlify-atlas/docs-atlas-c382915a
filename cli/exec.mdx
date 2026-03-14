@@ -1,0 +1,272 @@
+---
+title: exec
+description: One-shot prompts without saved sessions
+---
+
+## Overview
+
+The `exec` command runs a single prompt in a temporary ACP session without creating or using saved session records. Perfect for one-off queries and automation.
+
+## Syntax
+
+```bash
+acpx [global_options] <agent> exec [prompt_options] [prompt_text...]
+acpx [global_options] exec [prompt_options] [prompt_text...]  # defaults to codex
+```
+
+## Options
+
+<ParamField path="-f, --file" type="string">
+  Read prompt text from file. Use `-` to read from stdin.
+</ParamField>
+
+<Note>
+The `exec` command does **not** support the `-s, --session` or `--no-wait` flags, as it operates on temporary sessions.
+</Note>
+
+## Behavior
+
+1. Creates a temporary ACP session
+2. Sends the prompt once
+3. Waits for completion
+4. Does **not** write or use a saved session record
+5. Session is discarded after completion
+
+### Prompt Input
+
+Supports the same input methods as `prompt`:
+- Command-line arguments
+- `--file <path>` to read from file
+- `--file -` to read from stdin
+- Piped stdin (when no prompt args provided)
+
+## Exit Codes
+
+| Code | Meaning |
+|------|----------|
+| `0` | Success |
+| `1` | Agent/protocol/runtime error |
+| `2` | CLI usage error |
+| `3` | Timeout |
+| `5` | Permission denied |
+| `130` | Interrupted (SIGINT/SIGTERM) |
+
+<Note>
+Exit code `4` (no session found) is **not** used for `exec`, since it doesn't require existing sessions.
+</Note>
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Quick summary
+acpx codex exec "summarize this repository"
+
+# Default agent (codex)
+acpx exec "what does this repo do?"
+
+# Different agents
+acpx pi exec "review recent changes"
+acpx claude exec "explain auth flow"
+acpx openclaw exec "analyze architecture"
+```
+
+### Prompt from File
+
+```bash
+# Read from file
+acpx codex exec --file query.txt
+acpx exec --file /path/to/instructions.md
+
+# Read from stdin
+echo "summarize changes" | acpx exec
+cat query.txt | acpx codex exec
+acpx exec --file -
+
+# Combine stdin with args
+acpx exec --file - "also check for bugs"
+```
+
+### Output Formats
+
+```bash
+# JSON output
+acpx --format json codex exec "review changed files"
+
+# Strict JSON (no stderr)
+acpx --format json --json-strict codex exec "list TODO items"
+
+# Quiet mode (text only)
+acpx --format quiet exec "final recommendation"
+```
+
+### Permission Control
+
+```bash
+# Auto-approve all
+acpx --approve-all exec "analyze and suggest fixes"
+
+# Approve reads only (default)
+acpx --approve-reads exec "inspect codebase"
+
+# Deny all tools
+acpx --deny-all exec "explain without running commands"
+```
+
+### Automation Examples
+
+```bash
+# Daily repo summary
+acpx --format json exec "summarize commits from last 24h" > summary.json
+
+# CI/CD integration
+acpx --format quiet exec "review diff for security issues" | tee review.txt
+
+# Parse structured output
+acpx --format json codex exec "list failing tests" | jq -r '.text'
+```
+
+### Advanced Options
+
+```bash
+# Custom working directory
+acpx --cwd ~/repos/api exec "review endpoints"
+
+# Timeout control
+acpx --timeout 60 exec "quick analysis"
+
+# Verbose debugging
+acpx --verbose exec "debug issue"
+
+# Non-interactive fail mode
+acpx --non-interactive-permissions fail exec "automated check"
+```
+
+## Use Cases
+
+### Quick Queries
+
+```bash
+# No session needed
+acpx exec "how many files in src/?"
+acpx exec "explain package.json scripts"
+acpx exec "find recent changes to auth code"
+```
+
+### Automation Scripts
+
+```bash
+#!/bin/bash
+# Pre-commit hook
+DIFF=$(git diff --cached)
+echo "$DIFF" | acpx --format quiet exec --file - "Review for issues" > review.txt
+
+if grep -q "CRITICAL" review.txt; then
+  echo "Critical issues found:"
+  cat review.txt
+  exit 1
+fi
+```
+
+### CI/CD Pipelines
+
+```yaml
+# .github/workflows/review.yml
+- name: AI Code Review
+  run: |
+    acpx --format json exec "Review changed files for security" > review.json
+    jq '.findings' review.json
+```
+
+### Batch Processing
+
+```bash
+# Process multiple queries
+for file in src/*.ts; do
+  echo "Analyzing $file"
+  acpx exec "Summarize $file" >> analysis.txt
+done
+```
+
+## Comparison with `prompt`
+
+| Feature | `exec` | `prompt` |
+|---------|--------|----------|
+| Session persistence | No | Yes |
+| Context across calls | No | Yes |
+| Requires session creation | No | Yes |
+| Supports `--session` flag | No | Yes |
+| Supports `--no-wait` | No | Yes |
+| Use case | One-off queries | Iterative work |
+| Session metadata | Not saved | Saved to disk |
+| Turn history | Not tracked | Tracked |
+
+### When to Use `exec`
+
+✅ One-off queries
+✅ Automation scripts
+✅ CI/CD pipelines
+✅ Quick summaries
+✅ No context needed between calls
+
+### When to Use `prompt`
+
+✅ Iterative development
+✅ Multi-turn conversations
+✅ Need session context
+✅ Long-running workflows
+✅ Named work streams
+
+## Error Cases
+
+### Empty Prompt
+
+```bash
+$ acpx exec --file empty.txt
+Error: Prompt from --file is empty
+```
+
+Exit code: `2`
+
+### Invalid File Path
+
+```bash
+$ acpx exec --file missing.txt
+Error: ENOENT: no such file or directory
+```
+
+Exit code: `1`
+
+### Permission Denied
+
+```bash
+$ acpx --deny-all exec "run tests"
+# Agent requests tool permission, denied
+Exit code: 5
+```
+
+## Configuration Disable
+
+The `exec` command can be disabled via configuration:
+
+```json
+{
+  "disableExec": true
+}
+```
+
+When disabled:
+
+```bash
+$ acpx exec "query"
+Error: exec subcommand is disabled by configuration (disableExec: true)
+```
+
+Exit code: `1`
+
+## See Also
+
+- [prompt command](/cli/prompt) - Persistent session prompts
+- [sessions command](/cli/sessions) - Session management
+- [CLI Overview](/cli/overview) - Full command reference

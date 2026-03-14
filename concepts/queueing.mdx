@@ -1,0 +1,339 @@
+---
+title: Queueing
+description: Understanding the queue-owner process model and prompt queueing in acpx
+---
+
+## Queue-Owner Process Model
+
+When a prompt is already running for a session, `acpx` uses a **queue-owner process** to coordinate subsequent prompts. This ensures prompts execute in order without spawning multiple agent instances.
+
+<Info>
+The queue-owner process keeps the active turn running and drains queued prompts one-by-one after each completed turn.
+</Info>
+
+## How Queueing Works
+
+### First Prompt
+
+When you submit the first prompt to a session:
+
+```bash
+acpx codex "investigate flaky tests"
+```
+
+1. `acpx` spawns a queue-owner process
+2. The owner starts the ACP agent subprocess
+3. The prompt executes immediately
+4. The owner waits for new work up to TTL (default 300s)
+
+### Subsequent Prompts
+
+While the first prompt is running, submit another:
+
+```bash
+# In another terminal
+acpx codex "fix the test after investigation is done"
+```
+
+1. `acpx` detects the running queue owner via IPC
+2. The new prompt is enqueued
+3. The submitter blocks until completion (default)
+4. After the first turn completes, the owner drains the queue
+5. The second prompt executes
+
+<Note>
+Queue submission uses local Unix domain sockets for IPC. The queue-owner process stores its socket path in `~/.acpx/sessions/`.
+</Note>
+
+## Queue Owner TTL
+
+After the queue drains, the owner waits for new work up to its **TTL (time-to-live)**:
+
+- **Default TTL**: 300 seconds (5 minutes)
+- **Custom TTL**: Use `--ttl <seconds>`
+- **Infinite TTL**: Use `--ttl 0` to keep owner alive indefinitely
+
+```bash
+# Keep queue owner warm for quick follow-ups (30 seconds)
+acpx --ttl 30 codex "review this module"
+
+# Keep alive indefinitely
+acpx --ttl 0 codex "start long-running session"
+
+# Default TTL (300 seconds)
+acpx codex "one-off task"
+```
+
+<Warning>
+The queue owner keeps the agent process alive during the TTL window. For long-lived sessions, consider using `--ttl 0` or a higher value.
+</Warning>
+
+### TTL Behavior
+
+During the TTL window:
+- The owner keeps the ACP connection open
+- The agent subprocess remains running
+- New prompts are accepted immediately without reconnection overhead
+- After TTL expires with no work, the owner shuts down gracefully
+
+Source implementation from `session-runtime.ts`:
+
+```typescript
+export const DEFAULT_QUEUE_OWNER_TTL_MS = 300_000; // 5 minutes
+
+export function normalizeQueueOwnerTtlMs(ttlMs: number | undefined): number {
+  if (ttlMs == null) {
+    return DEFAULT_QUEUE_OWNER_TTL_MS;
+  }
+  if (!Number.isFinite(ttlMs) || ttlMs < 0) {
+    return DEFAULT_QUEUE_OWNER_TTL_MS;
+  }
+  // 0 means keep alive forever (no TTL)
+  return Math.round(ttlMs);
+}
+```
+
+## Fire-and-Forget Mode
+
+Use `--no-wait` to queue a prompt and return immediately:
+
+```bash
+acpx codex --no-wait "draft test migration plan"
+```
+
+Behavior:
+1. Prompt is enqueued with the queue owner
+2. `acpx` returns immediately after acknowledgement
+3. The prompt executes in the background
+4. Output is discarded (not streamed to the submitter)
+
+<Info>
+Fire-and-forget mode is useful for kicking off background work without blocking the terminal.
+</Info>
+
+### Use Cases for `--no-wait`
+
+```bash
+# Queue background analysis
+acpx codex --no-wait "analyze test coverage and generate report"
+
+# Continue working immediately
+acpx codex "implement new feature"
+
+# Both prompts execute in order, but you're not blocked waiting
+```
+
+## Cooperative Cancellation
+
+Use the `cancel` command to stop an in-flight prompt:
+
+```bash
+acpx codex cancel
+acpx codex cancel -s api
+```
+
+Cancellation behavior:
+1. Sends ACP `session/cancel` to the queue owner via IPC
+2. The owner requests cancellation from the agent
+3. Waits briefly for `stopReason=cancelled` response
+4. Returns success
+5. If no prompt is running, prints `nothing to cancel`
+
+<Warning>
+Cancellation is **cooperative**. The agent must implement `session/cancel` support for this to work. Most ACP agents support this.
+</Warning>
+
+### Interrupt Handling
+
+When you press `Ctrl+C` during a running prompt:
+
+```bash
+acpx codex "long-running investigation"
+# Press Ctrl+C
+```
+
+1. `acpx` sends ACP `session/cancel` first
+2. Waits up to 2.5 seconds for graceful cancellation
+3. Force-kills the process if cancellation doesn't complete
+
+From `session-runtime.ts`:
+
+```typescript
+const INTERRUPT_CANCEL_WAIT_MS = 2_500;
+
+await client.cancelActivePrompt(INTERRUPT_CANCEL_WAIT_MS);
+```
+
+This ensures clean teardown while preventing indefinite hangs.
+
+## Queue IPC Architecture
+
+The queue implementation uses Unix domain sockets for local IPC:
+
+### Connection Flow
+
+1. **Queue owner starts**: Creates a Unix socket at a session-specific path
+2. **Submitter connects**: Connects to the socket from `queue-ipc.ts`:
+
+```typescript
+const QUEUE_CONNECT_ATTEMPTS = 40;
+export const QUEUE_CONNECT_RETRY_MS = 50;
+
+for (let attempt = 0; attempt < attempts; attempt += 1) {
+  try {
+    return await connectToSocket(owner.socketPath);
+  } catch (error) {
+    if (!shouldRetryQueueConnect(error)) {
+      throw error;
+    }
+    await waitMs(QUEUE_CONNECT_RETRY_MS);
+  }
+}
+```
+
+3. **Message exchange**: JSON-RPC style messages over the socket
+4. **Acknowledgement**: Owner sends `{type: "accepted"}` when request is queued
+5. **Streaming**: For `waitForCompletion=true`, owner streams ACP events
+6. **Completion**: Owner sends `{type: "result"}` when prompt finishes
+
+### Queue Request Types
+
+The queue owner handles multiple request types:
+
+```typescript
+type QueueRequest =
+  | QueueSubmitRequest      // Submit a new prompt
+  | QueueCancelRequest      // Cancel running prompt
+  | QueueSetModeRequest     // Set session mode
+  | QueueSetConfigOptionRequest; // Set config option
+```
+
+All control operations (`cancel`, `set-mode`, `set`) route through queue IPC when an owner is active.
+
+## Queue Depth and Limits
+
+The queue owner enforces a maximum depth:
+
+```typescript
+const maxQueueDepth = Math.max(1, Math.round(options.maxQueueDepth ?? 16));
+```
+
+- **Default max depth**: 16 queued prompts
+- **Behavior when full**: New submissions are rejected
+- **Queue status**: Exposed via queue owner health checks
+
+### Checking Queue Health
+
+```typescript
+export type QueueOwnerHealth = {
+  sessionId: string;
+  hasLease: boolean;
+  healthy: boolean;
+  socketReachable: boolean;
+  pidAlive: boolean;
+  pid?: number;
+  queueDepth?: number;
+};
+```
+
+You can probe queue owner health programmatically:
+
+```typescript
+import { probeQueueOwnerHealth } from "./queue-ipc.js";
+
+const health = await probeQueueOwnerHealth(sessionId);
+console.log(`Queue depth: ${health.queueDepth}`);
+```
+
+## Practical Examples
+
+### Sequential Prompts
+
+```bash
+# Terminal 1: Long-running investigation
+acpx codex "analyze test failures across the codebase"
+
+# Terminal 2: Queue follow-up
+acpx codex "fix the top 3 failures you found"
+
+# Terminal 3: Queue another
+acpx codex "document the fixes"
+
+# All execute in order automatically
+```
+
+### Background Work
+
+```bash
+# Queue multiple background tasks
+acpx codex --no-wait "run full test suite"
+acpx codex --no-wait "update documentation"
+acpx codex --no-wait "generate changelog"
+
+# Check status later
+acpx codex status
+```
+
+### Cancellation Workflow
+
+```bash
+# Start a prompt
+acpx codex "investigate performance issue"
+
+# Changed your mind? Cancel it
+# (in another terminal)
+acpx codex cancel
+
+# Start something else
+acpx codex "work on different task"
+```
+
+### Queue Owner Lifecycle
+
+```bash
+# Start with short TTL for testing
+acpx --ttl 10 codex "quick task"
+
+# Wait 10 seconds after completion
+# Queue owner shuts down automatically
+
+# Next prompt spawns a new owner
+acpx codex "another task"
+```
+
+## Error Handling
+
+Queue operations can fail in several ways:
+
+### Connection Errors
+
+- `QUEUE_NOT_ACCEPTING_REQUESTS`: Owner is running but not responding
+- `QUEUE_DISCONNECTED_BEFORE_ACK`: Socket closed before acknowledgement
+- `QUEUE_DISCONNECTED_BEFORE_COMPLETION`: Socket closed mid-prompt
+
+### Protocol Errors
+
+- `QUEUE_PROTOCOL_MALFORMED_MESSAGE`: Invalid message from owner
+- `QUEUE_PROTOCOL_INVALID_JSON`: Non-JSON response
+- `QUEUE_OWNER_GENERATION_MISMATCH`: Stale owner metadata
+
+When protocol mismatches occur, `acpx` automatically drops stale metadata and retries:
+
+```typescript
+if (STALE_OWNER_PROTOCOL_DETAIL_CODES.has(detailCode)) {
+  await terminateQueueOwnerForSession(sessionId);
+  incrementPerfCounter("queue.owner.stale_recovered");
+  // Retry with fresh owner
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Permissions" icon="shield" href="/concepts/permissions">
+    Learn about permission modes and policies
+  </Card>
+  <Card title="Sessions" icon="database" href="/concepts/sessions">
+    Review session persistence and lifecycle
+  </Card>
+</CardGroup>

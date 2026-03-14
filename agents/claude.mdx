@@ -1,0 +1,267 @@
+---
+title: Claude Agent
+description: Using Claude Code with acpx through claude-agent-acp
+---
+
+Claude Code is Anthropic's coding agent interface. `acpx` integrates Claude through the `claude-agent-acp` adapter maintained by Zed Industries.
+
+## Registry Information
+
+- **Built-in name**: `claude`
+- **Adapter**: [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp)
+- **Upstream tool**: [Claude Code](https://claude.ai/code)
+
+## Prerequisites
+
+You need access to Claude Code:
+
+```bash
+# Sign up and configure Claude Code
+# Visit: https://claude.ai/code
+```
+
+The `claude-agent-acp` adapter is auto-downloaded via `npx` when you first use `acpx claude`.
+
+## Basic Usage
+
+### Create a Session
+
+```bash
+acpx claude sessions new
+```
+
+### Send a Prompt
+
+```bash
+acpx claude "refactor the auth middleware"
+```
+
+### One-Shot Execution
+
+```bash
+acpx claude exec "explain the database schema"
+```
+
+## Example Workflows
+
+### Code Review and Refactoring
+
+```bash
+acpx claude sessions new --name refactor
+acpx claude -s refactor "review the payment processing module"
+acpx claude -s refactor "suggest improvements for error handling"
+acpx claude -s refactor "apply the refactoring"
+```
+
+### Documentation Generation
+
+```bash
+acpx claude -s docs "generate API docs for the auth module"
+acpx claude -s docs "add usage examples"
+```
+
+### Bug Investigation
+
+```bash
+acpx claude "investigate why the checkout flow times out"
+```
+
+Claude will analyze the code, identify the issue, and propose a fix:
+
+```
+[thinking] Analyzing checkout flow for timeout issues
+
+[tool] Read src/checkout.ts (completed)
+
+[thinking] Found async/await issue in payment validation
+
+[tool] Edit src/checkout.ts (completed)
+  output:
+    Success. Updated 1 file.
+
+Fixed: Added proper async/await to payment validation.
+The timeout was caused by unhandled promise in the validation chain.
+```
+
+## Configuration
+
+### Override Claude Command
+
+Customize the adapter invocation in your config:
+
+```json
+{
+  "agents": {
+    "claude": {
+      "command": "npx -y @zed-industries/claude-agent-acp"
+    }
+  }
+}
+```
+
+### Permission Modes
+
+```bash
+# Auto-approve all operations
+acpx --approve-all claude "implement the feature and test it"
+
+# Approve reads only (default)
+acpx --approve-reads claude "analyze the codebase"
+
+# Deny all operations
+acpx --deny-all claude "explain your approach without file access"
+```
+
+## Session Management
+
+### List Sessions
+
+```bash
+acpx claude sessions list
+```
+
+### Inspect Current Session
+
+```bash
+acpx claude sessions show
+```
+
+### View History
+
+```bash
+acpx claude sessions history --limit 10
+```
+
+### Close Session
+
+```bash
+acpx claude sessions close
+```
+
+## Advanced Usage
+
+### Named Sessions for Parallel Work
+
+```bash
+# Backend session
+acpx claude -s backend "add pagination to the API"
+
+# Frontend session
+acpx claude -s frontend "update the UI to use paginated data"
+```
+
+### Prompt from File
+
+```bash
+acpx claude --file requirements.md
+```
+
+### Prompt from Stdin
+
+```bash
+cat spec.txt | acpx claude
+```
+
+### Queue Management
+
+```bash
+# Submit and return immediately
+acpx claude --no-wait "draft the architecture document"
+
+# Cancel running prompt
+acpx claude cancel
+```
+
+### Working Directory Control
+
+```bash
+# Work in a different repository
+acpx --cwd ~/repos/backend claude "review the auth changes"
+```
+
+## Output Formats
+
+### Structured JSON
+
+```bash
+acpx --format json claude exec "analyze test coverage" | jq
+```
+
+### JSON-Strict Mode
+
+Suppress all non-JSON stderr output:
+
+```bash
+acpx --format json --json-strict claude exec "review changed files"
+```
+
+### Quiet Mode
+
+```bash
+acpx --format quiet claude "summarize in 3 lines"
+```
+
+## Runtime Configuration
+
+### Set Mode
+
+```bash
+acpx claude set-mode auto
+```
+
+Mode values are adapter-defined. Check `claude-agent-acp` docs for supported modes.
+
+### Set Config Options
+
+```bash
+acpx claude set option_name value
+```
+
+Refer to the adapter documentation for available config options.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Claude not authenticated">
+    Ensure you're authenticated with Claude Code:
+    ```bash
+    # Check authentication status
+    # Follow setup at: https://claude.ai/code
+    ```
+  </Accordion>
+
+  <Accordion title="Adapter download fails">
+    The adapter is fetched via npx. Verify npm registry access:
+    ```bash
+    npx -y @zed-industries/claude-agent-acp --version
+    ```
+  </Accordion>
+
+  <Accordion title="Session fails to start">
+    Check agent status:
+    ```bash
+    acpx claude status
+    ```
+    Create a fresh session if needed:
+    ```bash
+    acpx claude sessions new
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related Links
+
+<CardGroup cols={2}>
+  <Card title="Claude Code" icon="globe" href="https://claude.ai/code">
+    Official Claude Code platform
+  </Card>
+  <Card title="claude-agent-acp" icon="github" href="https://github.com/zed-industries/claude-agent-acp">
+    ACP adapter for Claude
+  </Card>
+  <Card title="Named Sessions" icon="folder-tree" href="/guides/named-sessions">
+    Parallel workstreams guide
+  </Card>
+  <Card title="Permissions" icon="shield" href="/concepts/permissions">
+    Permission controls reference
+  </Card>
+</CardGroup>

@@ -1,0 +1,168 @@
+---
+title: Pi Agent
+description: Using the Pi Coding Agent with acpx
+---
+
+The Pi Coding Agent is a lightweight, fast coding agent built by Mario Zechner. `acpx` integrates Pi through the `pi-acp` adapter.
+
+## Registry Information
+
+- **Built-in name**: `pi`
+- **Adapter**: [pi-acp](https://github.com/svkozak/pi-acp)
+- **Upstream tool**: [Pi Coding Agent](https://github.com/mariozechner/pi)
+
+## Prerequisites
+
+You need to have the Pi Coding Agent installed and accessible in your PATH:
+
+```bash
+# Install Pi according to upstream instructions
+# Visit: https://github.com/mariozechner/pi
+```
+
+The `pi-acp` adapter is auto-downloaded via `npx` when you first use `acpx pi`.
+
+## Basic Usage
+
+### Create a Session
+
+```bash
+acpx pi sessions new
+```
+
+### Send a Prompt
+
+```bash
+acpx pi "review the recent changes"
+```
+
+### One-Shot Execution
+
+```bash
+acpx pi exec "summarize this repository"
+```
+
+## Example Workflows
+
+### Code Review Session
+
+```bash
+# Create a dedicated review session
+acpx pi sessions new --name review
+
+# Review changes
+acpx pi -s review "review PR #123 for regressions"
+
+# Follow up
+acpx pi -s review "propose a minimal fix for the auth bug"
+```
+
+### Quick One-Off Tasks
+
+```bash
+acpx pi exec "explain the auth flow in this codebase"
+```
+
+## Configuration
+
+### Override Pi Command
+
+If you need to customize how Pi is invoked (e.g., local development build), override it in your config:
+
+```json
+{
+  "agents": {
+    "pi": {
+      "command": "npx pi-acp"
+    }
+  }
+}
+```
+
+### Permission Modes
+
+Pi respects acpx permission controls:
+
+```bash
+# Auto-approve all file/terminal operations
+acpx --approve-all pi "apply the patch and run tests"
+
+# Approve reads only (default)
+acpx --approve-reads pi "inspect repo structure"
+
+# Deny all operations
+acpx --deny-all pi "explain what you can do without tools"
+```
+
+## Session Management
+
+### List Sessions
+
+```bash
+acpx pi sessions list
+```
+
+### Inspect Current Session
+
+```bash
+acpx pi sessions show
+```
+
+### View History
+
+```bash
+acpx pi sessions history --limit 10
+```
+
+### Close Session
+
+```bash
+acpx pi sessions close
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Pi not found in PATH">
+    Make sure Pi is installed and accessible:
+    ```bash
+    which pi
+    ```
+    If not found, install Pi from the [upstream repository](https://github.com/mariozechner/pi).
+  </Accordion>
+
+  <Accordion title="Adapter download fails">
+    The pi-acp adapter is downloaded automatically via npx. If downloads fail, check your network and npm registry settings:
+    ```bash
+    npx pi-acp --version
+    ```
+  </Accordion>
+
+  <Accordion title="Session won't start">
+    Check the agent process status:
+    ```bash
+    acpx pi status
+    ```
+    If the process is dead, try creating a new session:
+    ```bash
+    acpx pi sessions new
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related Links
+
+<CardGroup cols={2}>
+  <Card title="Pi Repository" icon="github" href="https://github.com/mariozechner/pi">
+    Upstream Pi Coding Agent project
+  </Card>
+  <Card title="pi-acp Adapter" icon="github" href="https://github.com/svkozak/pi-acp">
+    ACP adapter for Pi
+  </Card>
+  <Card title="Session Management" icon="list" href="/guides/session-management">
+    Learn more about sessions
+  </Card>
+  <Card title="Permissions" icon="shield" href="/concepts/permissions">
+    Understanding permission controls
+  </Card>
+</CardGroup>

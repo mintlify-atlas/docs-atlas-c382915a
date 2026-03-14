@@ -1,0 +1,293 @@
+---
+title: cancel
+description: Cooperatively cancel running prompts
+---
+
+## Overview
+
+The `cancel` command sends a cooperative cancellation request to a running prompt via the ACP `session/cancel` method.
+
+## Syntax
+
+```bash
+acpx [global_options] <agent> cancel [-s <name>]
+acpx [global_options] cancel [-s <name>]  # defaults to codex
+```
+
+## Options
+
+<ParamField path="-s, --session" type="string">
+  Named session to cancel. If omitted, cancels the cwd default session.
+</ParamField>
+
+## Behavior
+
+1. Finds the session matching scope `(agentCommand, cwd, name?)`
+2. If no session exists, prints `nothing to cancel` and exits successfully
+3. If session exists but no prompt is running, prints `nothing to cancel` and exits successfully
+4. If a prompt is running, sends cooperative `session/cancel` through queue-owner IPC
+5. Agent receives cancellation request and stops gracefully
+6. Returns after cancellation is sent (does not wait for full cleanup)
+
+<Note>
+This is a **cooperative** cancellation. The agent receives the request and should stop gracefully. It is not a force-kill.
+</Note>
+
+## Exit Codes
+
+| Code | Meaning |
+|------|----------|
+| `0` | Success (including "nothing to cancel") |
+| `1` | Error communicating with agent |
+| `2` | CLI usage error |
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Start a long-running prompt
+acpx codex "analyze entire codebase" &
+
+# Cancel it from another terminal
+acpx codex cancel
+```
+
+### Named Session
+
+```bash
+# Start prompt in named session
+acpx codex -s backend "long analysis" &
+
+# Cancel specific session
+acpx codex cancel -s backend
+```
+
+### Cancel with Default Agent
+
+```bash
+# Start prompt with default agent (codex)
+acpx "investigate test failures" &
+
+# Cancel with default agent
+acpx cancel
+```
+
+### Different Agents
+
+```bash
+# Each agent has separate sessions
+acpx pi "analyze changes" &
+acpx codex "review code" &
+
+# Cancel specific agent's work
+acpx pi cancel
+acpx codex cancel
+```
+
+### Nothing to Cancel
+
+```bash
+$ acpx codex cancel
+nothing to cancel
+```
+
+Exit code: `0` (success)
+
+## Output Formats
+
+### Text (default)
+
+```bash
+$ acpx codex cancel
+cancel requested
+```
+
+or
+
+```bash
+$ acpx codex cancel
+nothing to cancel
+```
+
+### JSON
+
+```bash
+$ acpx --format json codex cancel
+{"action":"cancel_result","acpxRecordId":"01JQWE...","cancelled":true}
+```
+
+or when nothing to cancel:
+
+```bash
+$ acpx --format json codex cancel
+{"action":"cancel_result","acpxRecordId":"01JQWE...","cancelled":false}
+```
+
+## Interactive Cancel (Ctrl+C)
+
+When running a prompt interactively, pressing `Ctrl+C` triggers the same cooperative cancel flow:
+
+```bash
+acpx codex "long-running task"
+# Press Ctrl+C
+```
+
+**Behavior:**
+1. Sends `session/cancel` to the agent
+2. Waits briefly for `stopReason=cancelled` response
+3. If graceful cancel succeeds, exits cleanly with code `130`
+4. If graceful cancel fails/times out, force-kills the agent process
+5. Exit code: `130` (interrupted)
+
+## Cancel vs Force-Kill
+
+### Cooperative Cancel (Recommended)
+
+```bash
+acpx codex cancel
+```
+
+- Sends ACP `session/cancel` request
+- Agent stops gracefully
+- Session state remains valid
+- Can resume session later
+- Exit code: `0`
+
+### Force-Kill (Not Recommended)
+
+```bash
+# Find process
+acpx codex status
+# Output: pid: 12345
+
+# Force kill
+kill -9 12345
+```
+
+- Immediately terminates agent process
+- Session may be left in inconsistent state
+- May lose unsaved work
+- Use only if cooperative cancel fails
+
+## Use Cases
+
+### Long-Running Analysis
+
+```bash
+# Start expensive operation
+acpx codex "analyze entire codebase for vulnerabilities"
+
+# Realize it's too broad, cancel
+# (In another terminal)
+acpx codex cancel
+
+# Try more focused query
+acpx codex "analyze auth code for vulnerabilities"
+```
+
+### Parallel Work Management
+
+```bash
+# Start multiple tasks
+acpx codex -s backend "refactor API" &
+acpx codex -s frontend "update UI" &
+acpx codex -s docs "write guides" &
+
+# Cancel one stream if priorities change
+acpx codex cancel -s docs
+```
+
+### Automation Timeout Fallback
+
+```bash
+#!/bin/bash
+# Start prompt in background
+acpx codex "analyze changes" &
+PID=$!
+
+# Wait up to 60 seconds
+sleep 60
+
+# If still running, cancel
+if kill -0 $PID 2>/dev/null; then
+  acpx codex cancel
+  wait $PID
+fi
+```
+
+### CI/CD Early Exit
+
+```bash
+# In CI pipeline
+acpx --timeout 120 codex "review PR" &
+PROMPT_PID=$!
+
+# Monitor for stop signal
+trap "acpx codex cancel; wait $PROMPT_PID" SIGTERM SIGINT
+
+wait $PROMPT_PID
+```
+
+## Common Mistakes
+
+### Wrong Session Scope
+
+```bash
+# Started with named session
+acpx codex -s backend "work" &
+
+# Try to cancel without name (won't work)
+acpx codex cancel  # Looks for cwd default, not "backend"
+
+# Correct
+acpx codex cancel -s backend
+```
+
+### Wrong Agent
+
+```bash
+# Started with pi
+acpx pi "analyze" &
+
+# Try to cancel with codex (won't work)
+acpx codex cancel  # Different agent
+
+# Correct
+acpx pi cancel
+```
+
+### Multiple Queued Prompts
+
+```bash
+# Queue multiple prompts
+acpx codex "task 1" &
+acpx codex "task 2"  # Queued
+acpx codex "task 3"  # Queued
+
+# Cancel only affects currently running prompt
+acpx codex cancel  # Cancels "task 1", "task 2" will start next
+```
+
+## Session State After Cancel
+
+After a successful cancel:
+- Session remains active and open
+- Can send new prompts immediately
+- Session metadata updated with last activity
+- Queue owner may stay alive (up to TTL)
+
+```bash
+# Cancel running prompt
+acpx codex cancel
+
+# Immediately send new prompt
+acpx codex "try different approach"
+```
+
+## See Also
+
+- [prompt command](/cli/prompt) - Send prompts to sessions
+- [status command](/cli/status) - Check if prompt is running
+- [sessions command](/cli/sessions) - Session management
+- [CLI Overview](/cli/overview) - Full command reference

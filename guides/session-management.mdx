@@ -1,0 +1,340 @@
+---
+title: Session Management
+description: Understanding and managing acpx sessions for persistent multi-turn conversations
+---
+
+## Overview
+
+Sessions are the core concept in acpx. A session represents a persistent conversation with an AI coding agent, scoped to a specific directory and agent.
+
+## Session Lifecycle
+
+<Steps>
+  <Step title="Create a session">
+    Create a new session for your current directory:
+
+    ```bash
+    acpx codex sessions new
+    ```
+
+    This creates a session record stored in `~/.acpx/sessions/`.
+  </Step>
+  <Step title="Send prompts">
+    Once a session exists, you can send prompts to it:
+
+    ```bash
+    acpx codex 'fix the failing test'
+    acpx codex 'now update the docs'
+    ```
+
+    Each prompt builds on the conversation history.
+  </Step>
+  <Step title="Close the session">
+    When you're done, close the session:
+
+    ```bash
+    acpx codex sessions close
+    ```
+
+    This soft-closes the session - the history is preserved but the session won't be auto-resumed.
+  </Step>
+</Steps>
+
+## Session Commands
+
+### List Sessions
+
+View all sessions for a specific agent:
+
+```bash
+acpx codex sessions
+# or explicitly:
+acpx codex sessions list
+```
+
+Output shows session ID, name, directory, and last used timestamp:
+
+```
+ses_abc123    /home/user/project    2026-03-14T10:30:00Z
+ses_def456    /home/user/api        2026-03-14T09:15:00Z [closed]
+```
+
+### Create New Session
+
+Explicitly create a fresh session:
+
+```bash
+acpx codex sessions new
+```
+
+<Note>
+  Creating a new session soft-closes any existing session in the same scope (same directory and agent).
+</Note>
+
+### Ensure Session
+
+Get-or-create pattern - returns existing session or creates one:
+
+```bash
+acpx codex sessions ensure
+```
+
+This is idempotent and useful in scripts:
+
+```bash
+# Always safe to run
+acpx codex sessions ensure
+acpx codex 'run the tests'
+```
+
+### Show Session Details
+
+Inspect stored session metadata:
+
+```bash
+acpx codex sessions show
+```
+
+Output includes:
+- Session ID and runtime session ID (if provided by adapter)
+- Agent command
+- Working directory
+- Created and last used timestamps
+- Closed status
+
+### View Session History
+
+See recent conversation turns:
+
+```bash
+acpx codex sessions history
+```
+
+Limit the number of turns shown:
+
+```bash
+acpx codex sessions history --limit 10
+```
+
+Output shows timestamp, role (user/assistant), and a preview of each turn:
+
+```
+2026-03-14T10:30:00Z  user       fix the failing test
+2026-03-14T10:31:00Z  assistant  I'll analyze the test suite and identify the issue...
+2026-03-14T10:45:00Z  user       now update the documentation
+2026-03-14T10:46:00Z  assistant  I'll update the docs to reflect the changes...
+```
+
+### Close Session
+
+Soft-close a session:
+
+```bash
+acpx codex sessions close
+```
+
+What happens:
+- Queue owner process is terminated
+- Session marked as `closed: true`
+- History is preserved on disk
+- Auto-resume will skip this session
+
+<Warning>
+  Closing a session doesn't delete it. The session record and history remain available for inspection.
+</Warning>
+
+## Auto-Resume Behavior
+
+When you run a prompt command, acpx automatically finds the right session:
+
+<Steps>
+  <Step title="Find git root">
+    acpx walks up from your current directory to find the nearest `.git` directory.
+  </Step>
+  <Step title="Walk down">
+    Starting from your current directory, acpx walks up to the git root (inclusive).
+  </Step>
+  <Step title="Match session">
+    At each directory, acpx looks for an active (non-closed) session matching:
+    - Agent command (e.g., "codex")
+    - Directory
+    - Optional session name
+  </Step>
+  <Step title="Resume or error">
+    If found, acpx resumes that session. If not found, you'll get an error:
+
+    ```
+    Error: No session found for scope (codex, /home/user/project)
+    Run: acpx codex sessions new
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  If no git root exists, acpx only checks the exact current directory - no parent walk.
+</Note>
+
+## Status Command
+
+Check the local process status for your current session:
+
+```bash
+acpx codex status
+```
+
+Output shows:
+
+```
+Status: running
+Session ID: ses_abc123
+Agent: codex
+PID: 12345
+Uptime: 5m 30s
+Last prompt: 2m ago
+```
+
+Possible statuses:
+- `running`: Agent process is alive
+- `dead`: Agent process has died (will be respawned on next prompt)
+- `no-session`: No session exists for this scope
+
+## Crash Recovery
+
+If an agent process dies, acpx automatically handles recovery:
+
+<Steps>
+  <Step title="Detect dead process">
+    On the next prompt, acpx detects the dead PID.
+  </Step>
+  <Step title="Respawn agent">
+    acpx spawns a new agent process.
+  </Step>
+  <Step title="Try to load session">
+    acpx attempts `session/load` to restore the conversation.
+  </Step>
+  <Step title="Fallback to new session">
+    If loading fails, acpx falls back to `session/new` and continues.
+  </Step>
+</Steps>
+
+This happens transparently - you'll see your prompt execute normally.
+
+## Prompt Queueing
+
+When a prompt is already running, acpx queues new prompts:
+
+```bash
+# Terminal 1
+acpx codex 'analyze the entire codebase'
+
+# Terminal 2 - while first prompt is still running
+acpx codex 'fix the auth bug'
+# This prompt is queued and will run after the first completes
+```
+
+Queue behavior:
+- One queue owner process per session
+- Prompts execute in order
+- Owner stays alive for TTL (default 300s) after queue drains
+- `--no-wait` flag queues and returns immediately
+
+### Fire-and-Forget
+
+Queue a prompt without waiting:
+
+```bash
+acpx codex --no-wait 'draft test migration plan'
+```
+
+This returns immediately after queueing. The prompt runs in the background.
+
+## Practical Scenarios
+
+### PR Review Workflow
+
+```bash
+# Start a session for PR review
+acpx codex sessions new
+acpx codex 'Review the changes in the current branch'
+
+# Follow up with specific questions
+acpx codex 'Are there any security concerns?'
+acpx codex 'Draft a review comment for the validation logic'
+
+# Done - close it
+acpx codex sessions close
+```
+
+### Long-Running Project
+
+```bash
+# Create a session once
+acpx codex sessions ensure
+
+# Work over multiple days
+acpx codex 'implement user authentication'
+# ... next day ...
+acpx codex 'add password reset flow'
+# ... week later ...
+acpx codex 'refactor auth to use JWT'
+
+# Check history anytime
+acpx codex sessions history --limit 20
+```
+
+### Multi-Directory Setup
+
+```bash
+# Backend directory
+cd ~/repos/shop/backend
+acpx codex sessions new
+acpx codex 'review API endpoints'
+
+# Frontend directory (separate session)
+cd ~/repos/shop/frontend
+acpx codex sessions new
+acpx codex 'review UI components'
+
+# Each directory maintains its own session
+```
+
+## Session Configuration
+
+You can configure agent mode and options during a session:
+
+### Set Mode
+
+```bash
+acpx codex set-mode auto
+```
+
+Mode values are adapter-defined. For example, codex might support `auto`, `ask`, or `chat` modes.
+
+### Set Config Option
+
+```bash
+acpx codex set thought_level high
+```
+
+This sends `session/set_config_option` to the adapter.
+
+<Note>
+  Both `set-mode` and `set` route through the queue owner when active, or reconnect directly when idle.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Named Sessions" icon="tags" href="/guides/named-sessions">
+    Run parallel workstreams with named sessions
+  </Card>
+  <Card title="Output Formats" icon="code" href="/guides/output-formats">
+    Use JSON output for automation
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Customize session behavior with config files
+  </Card>
+  <Card title="Basic Usage" icon="terminal" href="/guides/basic-usage">
+    Review core commands and workflows
+  </Card>
+</CardGroup>

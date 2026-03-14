@@ -1,0 +1,570 @@
+---
+title: Automation
+description: Using acpx for scripting, CI/CD integration, and orchestration with JSON output, exit codes, and non-interactive modes
+---
+
+## Overview
+
+acpx is designed for scriptable automation. It supports:
+
+- **Structured JSON output** for parsing ACP events
+- **`--no-wait`** for background execution
+- **Well-defined exit codes** for error handling
+- **Non-interactive permission modes** for CI/CD
+- **Batch operations** via named sessions and queueing
+
+## JSON Output Format for Automation
+
+### Basic Usage
+
+```bash
+acpx --format json codex exec 'review this PR'
+```
+
+Output (NDJSON):
+```json
+{"jsonrpc":"2.0","id":"req-1","method":"session/prompt","params":{...}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Analyzing..."}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionUpdate":"tool_call_delta","toolCall":{"id":"call-1","status":"running","title":"Read src/main.ts"}}}
+{"jsonrpc":"2.0","id":"req-1","result":{"stopReason":"end_turn"}}
+```
+
+### Strict JSON Mode
+
+Suppress non-JSON stderr output:
+
+```bash
+acpx --format json --json-strict codex exec 'task'
+```
+
+This ensures:
+- **stdout**: Only ACP JSON-RPC messages (NDJSON)
+- **stderr**: No human-readable acpx logs
+
+<Note>
+`--json-strict` requires `--format json`. Use it when piping to strict parsers.
+</Note>
+
+### Parsing JSON Events
+
+Extract tool calls:
+
+```bash
+acpx --format json codex exec 'review changes' \
+  | jq -r 'select(.method=="session/update" and .params.sessionUpdate=="tool_call_delta") | [.params.toolCall.status, .params.toolCall.title] | @tsv'
+```
+
+Output:
+```
+running	Read src/main.ts
+completed	Read src/main.ts
+running	Edit src/main.ts
+completed	Edit src/main.ts
+```
+
+Extract assistant text:
+
+```bash
+acpx --format json codex exec 'summarize' \
+  | jq -r 'select(.method=="session/update" and .params.sessionUpdate=="agent_message_chunk") | .params.content.text' \
+  | tr -d '\n'
+```
+
+### Local Query Commands in JSON
+
+Session listing:
+
+```bash
+acpx --format json codex sessions list
+```
+
+Output:
+```json
+[
+  {
+    "schema": 5,
+    "acpxRecordId": "019c...",
+    "agentCommand": "npx @zed-industries/codex-acp",
+    "cwd": "/home/user/projects/myapp",
+    "name": null,
+    "createdAt": "2026-03-14T01:30:00.000Z",
+    "lastUsedAt": "2026-03-14T01:35:00.000Z",
+    "closed": false
+  }
+]
+```
+
+Session metadata:
+
+```bash
+acpx --format json codex sessions show
+```
+
+Session history:
+
+```bash
+acpx --format json codex sessions history --limit 10
+```
+
+Output:
+```json
+{
+  "entries": [
+    {
+      "timestamp": "2026-03-14T01:30:00.000Z",
+      "role": "user",
+      "textPreview": "fix the tests"
+    },
+    {
+      "timestamp": "2026-03-14T01:35:00.000Z",
+      "role": "assistant",
+      "textPreview": "I've identified the flaky test in checkout.submit..."
+    }
+  ]
+}
+```
+
+## `--no-wait` for Background Execution
+
+### Fire-and-Forget
+
+Queue a prompt without waiting:
+
+```bash
+acpx codex 'run full test suite'
+acpx codex --no-wait 'summarize failures after tests complete'
+```
+
+The second command:
+1. Submits to the queue owner
+2. Waits for acknowledgement
+3. **Exits immediately** (doesn't block)
+4. Queue owner processes it after the first prompt finishes
+
+### Exit Code on Enqueue
+
+With `--no-wait`, exit code reflects **enqueue status**, not prompt outcome:
+
+- **Exit 0**: Prompt successfully queued
+- **Exit 1**: Failed to enqueue (queue owner unreachable, etc.)
+
+<Warning>
+`--no-wait` doesn't report prompt completion status—use the queue owner's logs or separate `status` checks.
+</Warning>
+
+### Batch Background Tasks
+
+```bash
+for task in task1 task2 task3; do
+  acpx codex --no-wait "process $task"
+done
+```
+
+All tasks queue instantly; the queue owner drains them sequentially.
+
+## Exit Codes and Error Handling
+
+### Exit Code Table
+
+| Code  | Meaning                                    | Example                                      |
+|-------|--------------------------------------------|----------------------------------------------|
+| `0`   | Success                                    | Prompt completed with `end_turn`             |
+| `1`   | Agent/protocol/runtime error               | ACP error, agent crash, network failure      |
+| `2`   | CLI usage error                            | Invalid flag, missing required arg           |
+| `3`   | Timeout                                    | `--timeout` exceeded                         |
+| `4`   | No session found                           | Prompt without `sessions new`                |
+| `5`   | Permission denied                          | All permissions denied, none approved        |
+| `130` | Interrupted (SIGINT/SIGTERM)               | User pressed Ctrl+C                          |
+
+### Checking Exit Codes in Scripts
+
+```bash
+#!/bin/bash
+set -e
+
+acpx codex exec 'validate config'
+if [ $? -eq 0 ]; then
+  echo "Validation passed"
+  acpx codex exec 'deploy to staging'
+else
+  echo "Validation failed: exit $?"
+  exit 1
+fi
+```
+
+### Handling Specific Errors
+
+```bash
+acpx codex 'fix the tests'
+case $? in
+  0)
+    echo "Tests fixed successfully"
+    ;;
+  1)
+    echo "Agent error—check logs"
+    ;;
+  3)
+    echo "Timeout—increase with --timeout"
+    ;;
+  4)
+    echo "No session—run: acpx codex sessions new"
+    acpx codex sessions new
+    acpx codex 'fix the tests'
+    ;;
+  5)
+    echo "Permission denied—use --approve-all"
+    ;;
+  *)
+    echo "Unexpected error: $?"
+    ;;
+esac
+```
+
+### Exit Code 4: Session Creation
+
+When a prompt finds no session:
+
+```bash
+acpx codex 'task'
+# Exit 4: No session found
+# acpx suggests: Run `acpx codex sessions new`
+
+# Automated fix:
+acpx codex sessions ensure  # idempotent get-or-create
+acpx codex 'task'
+```
+
+### Exit Code 5: Permission Denied
+
+If all permissions are denied and none approved:
+
+```bash
+acpx --deny-all codex 'analyze repo'
+# Exit 5: Permission denied
+```
+
+Fix with `--approve-all` or `--approve-reads`:
+
+```bash
+acpx --approve-reads codex 'analyze repo'
+```
+
+## Permission Handling in Non-Interactive Mode
+
+### Non-Interactive Detection
+
+When stdin is not a TTY (e.g., in CI/CD), acpx cannot prompt for permissions.
+
+### Permission Policies
+
+**`--approve-all`**: Auto-approve everything
+
+```bash
+acpx --approve-all codex 'apply patch and run tests'
+```
+
+Use in trusted CI environments.
+
+**`--approve-reads`** (default): Approve reads, deny writes when non-interactive
+
+```bash
+acpx codex 'analyze codebase'  # reads approved automatically
+```
+
+Safe for untrusted code analysis.
+
+**`--deny-all`**: Deny everything
+
+```bash
+acpx --deny-all codex 'explain code without tool access'
+```
+
+Maximum safety—agent can only use reasoning, no file access.
+
+### `--non-interactive-permissions`
+
+Control behavior when permission prompt is unavailable:
+
+**`deny`** (default): Silently deny non-read permissions
+
+```bash
+acpx codex 'task'  # in CI: reads approved, writes denied
+```
+
+**`fail`**: Fail fast on unpromptable permissions
+
+```bash
+acpx --non-interactive-permissions fail codex 'task'
+# If agent requests write: exit 1 with PERMISSION_PROMPT_UNAVAILABLE
+```
+
+<Accordion title="When to use fail vs deny">
+- **`deny`**: CI/CD where you want best-effort execution (approve reads, skip writes)
+- **`fail`**: Strict validation where any denied permission should abort the job
+</Accordion>
+
+### CI/CD Example
+
+```yaml
+# .github/workflows/review.yml
+name: PR Review
+on: pull_request
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      
+      - name: Install acpx
+        run: npm install -g acpx@latest
+      
+      - name: Review PR
+        run: |
+          acpx --approve-reads --format json codex exec 'review changed files for regressions' \
+            > review.json
+      
+      - name: Extract summary
+        run: |
+          jq -r 'select(.method=="session/update" and .params.sessionUpdate=="agent_message_chunk") | .params.content.text' \
+            review.json | tr -d '\n' > summary.txt
+      
+      - name: Comment on PR
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file summary.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+## Scripting Patterns
+
+### Pattern 1: Conditional Execution
+
+```bash
+#!/bin/bash
+acpx --format quiet codex exec 'is this PR safe to merge?' > decision.txt
+
+if grep -q 'yes' decision.txt; then
+  echo "Merging PR"
+  gh pr merge --auto --squash
+else
+  echo "Blocking merge—review required"
+fi
+```
+
+### Pattern 2: Parallel Sessions
+
+```bash
+#!/bin/bash
+# Create named sessions for parallel work
+acpx codex sessions ensure --name backend
+acpx codex sessions ensure --name frontend
+
+# Run tasks in parallel (with --no-wait)
+acpx codex -s backend --no-wait 'run API tests'
+acpx codex -s frontend --no-wait 'run UI tests'
+
+# Poll status
+while true; do
+  backend_status=$(acpx codex -s backend status | grep -c running)
+  frontend_status=$(acpx codex -s frontend status | grep -c running)
+  
+  if [ $backend_status -eq 0 ] && [ $frontend_status -eq 0 ]; then
+    break
+  fi
+  sleep 5
+done
+
+echo "All tests complete"
+```
+
+### Pattern 3: Retry on Timeout
+
+```bash
+#!/bin/bash
+max_attempts=3
+attempt=1
+
+while [ $attempt -le $max_attempts ]; do
+  echo "Attempt $attempt..."
+  acpx --timeout 120 codex 'investigate flaky test'
+  exit_code=$?
+  
+  if [ $exit_code -eq 0 ]; then
+    echo "Success"
+    exit 0
+  elif [ $exit_code -eq 3 ]; then
+    echo "Timeout—retrying with longer timeout"
+    attempt=$((attempt + 1))
+  else
+    echo "Non-timeout error: $exit_code"
+    exit $exit_code
+  fi
+done
+
+echo "Max retries exceeded"
+exit 1
+```
+
+### Pattern 4: JSON Event Aggregation
+
+```bash
+#!/bin/bash
+acpx --format json codex exec 'analyze security issues' > events.ndjson
+
+# Extract all tool calls
+jq -r 'select(.method=="session/update" and .params.sessionUpdate=="tool_call_delta") | .params.toolCall.title' \
+  events.ndjson > tools.txt
+
+# Count unique tools
+sort tools.txt | uniq -c | sort -rn
+
+# Extract final assistant message
+jq -r 'select(.method=="session/update" and .params.sessionUpdate=="agent_message_chunk") | .params.content.text' \
+  events.ndjson | tr -d '\n' > summary.txt
+```
+
+### Pattern 5: Multi-Stage Pipeline
+
+```bash
+#!/bin/bash
+set -e
+
+# Stage 1: Analysis
+echo "Stage 1: Analyzing codebase..."
+acpx --approve-reads codex sessions ensure
+acpx codex 'analyze test coverage and identify gaps' > /dev/null
+
+# Stage 2: Implementation
+echo "Stage 2: Implementing missing tests..."
+acpx --approve-all codex 'write tests for uncovered code paths' > /dev/null
+
+# Stage 3: Validation
+echo "Stage 3: Running tests..."
+acpx codex 'run all tests and report results'
+
+if [ $? -eq 0 ]; then
+  echo "Pipeline succeeded"
+else
+  echo "Pipeline failed"
+  exit 1
+fi
+```
+
+## Integration Examples
+
+### GitLab CI
+
+```yaml
+# .gitlab-ci.yml
+review-pr:
+  stage: test
+  image: node:22
+  script:
+    - npm install -g acpx@latest
+    - acpx --approve-reads --format json codex exec "review MR changes" > review.json
+    - jq . review.json
+  artifacts:
+    paths:
+      - review.json
+  only:
+    - merge_requests
+```
+
+### Jenkins Pipeline
+
+```groovy
+pipeline {
+  agent any
+  stages {
+    stage('Install') {
+      steps {
+        sh 'npm install -g acpx@latest'
+      }
+    }
+    stage('Analyze') {
+      steps {
+        sh '''
+          acpx --approve-reads --format quiet codex exec "summarize security risks" > risks.txt
+          cat risks.txt
+        '''
+      }
+    }
+  }
+}
+```
+
+### Docker Container
+
+```dockerfile
+FROM node:22-alpine
+
+RUN npm install -g acpx@latest
+
+WORKDIR /workspace
+COPY . .
+
+CMD ["acpx", "--approve-reads", "codex", "exec", "analyze this repo"]
+```
+
+Run:
+```bash
+docker build -t acpx-analyzer .
+docker run --rm -v $(pwd):/workspace acpx-analyzer
+```
+
+### Kubernetes Job
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: acpx-review
+spec:
+  template:
+    spec:
+      containers:
+      - name: acpx
+        image: node:22
+        command:
+          - /bin/sh
+          - -c
+          - |
+            npm install -g acpx@latest
+            cd /workspace
+            acpx --approve-reads --format json codex exec 'review code' > /output/review.json
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: output
+          mountPath: /output
+      restartPolicy: Never
+      volumes:
+      - name: workspace
+        hostPath:
+          path: /path/to/repo
+      - name: output
+        emptyDir: {}
+```
+
+## Best Practices
+
+1. **Use `--format json --json-strict`** for strict parsers
+2. **Use `--approve-reads`** for untrusted code analysis
+3. **Use `--approve-all`** only in trusted CI environments
+4. **Use `sessions ensure`** for idempotent session creation
+5. **Check exit codes** for proper error handling
+6. **Use `--no-wait`** for true background execution
+7. **Set reasonable `--timeout`** values for CI jobs
+8. **Use `--non-interactive-permissions fail`** for strict validation
+9. **Parse NDJSON line-by-line** for large outputs
+10. **Store event logs** for audit trails
+
+## Implementation References
+
+- JSON formatter: `src/output-json-formatter.ts`
+- Exit codes: `src/cli-core.ts`, `docs/CLI.md:478`
+- Permission handling: `src/permissions.ts`, `src/permission-prompt.ts`
+- `--no-wait` implementation: `src/session-runtime.ts:1124`

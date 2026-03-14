@@ -1,0 +1,337 @@
+---
+title: status
+description: Show local process status for sessions
+---
+
+## Overview
+
+The `status` command displays local process status for the session's queue owner, including PID, uptime, and last prompt timestamp.
+
+## Syntax
+
+```bash
+acpx [global_options] <agent> status
+acpx [global_options] <agent> status -s <name>
+acpx [global_options] status           # defaults to codex
+acpx [global_options] status -s <name> # defaults to codex
+```
+
+## Options
+
+<ParamField path="-s, --session" type="string">
+  Named session to check. If omitted, checks the cwd default session.
+</ParamField>
+
+## Behavior
+
+1. Finds the session matching scope `(agentCommand, cwd, name?)`
+2. If no session exists, reports `no-session` status
+3. If session exists, probes queue owner health using PID-based check (`kill(pid, 0)` semantics)
+4. Reports `running` or `dead` based on health probe
+5. Displays session metadata and process information
+
+<Note>
+Status checks are **local and PID-based**. They check if the queue owner process is alive on this machine, not whether the remote agent is responsive.
+</Note>
+
+## Output Fields
+
+### When Session Exists
+
+| Field | Description |
+|-------|-------------|
+| `session` | acpx record ID |
+| `agentSessionId` | Agent-specific session ID (if available) |
+| `agent` | Agent command string |
+| `pid` | Process ID of queue owner |
+| `status` | `running` or `dead` |
+| `uptime` | Uptime in HH:MM:SS format (when running) |
+| `lastPromptTime` | ISO timestamp of last prompt |
+| `exitCode` | Last exit code (when dead) |
+| `signal` | Last exit signal (when dead) |
+
+### When No Session
+
+| Field | Description |
+|-------|-------------|
+| `session` | `-` |
+| `agent` | Agent command string |
+| `pid` | `-` |
+| `status` | `no-session` |
+| `uptime` | `-` |
+| `lastPromptTime` | `-` |
+
+## Exit Codes
+
+| Code | Meaning |
+|------|----------|
+| `0` | Success (regardless of status) |
+| `1` | Error querying status |
+| `2` | CLI usage error |
+
+<Note>
+Status returns exit code `0` even when status is `dead` or `no-session`. The command itself succeeded; check output for actual status.
+</Note>
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Check default session
+acpx codex status
+
+# Output when running:
+# session: 01JQWE...
+# agent: npx @zed-industries/codex-acp
+# pid: 12345
+# status: running
+# uptime: 00:15:42
+# lastPromptTime: 2026-03-14T10:30:00.000Z
+```
+
+### Named Session
+
+```bash
+# Check named session
+acpx codex status -s backend
+```
+
+### Different Agents
+
+```bash
+acpx pi status
+acpx openclaw status
+acpx claude status
+```
+
+### No Session
+
+```bash
+$ acpx codex status
+session: -
+agent: npx @zed-industries/codex-acp
+pid: -
+status: no-session
+uptime: -
+lastPromptTime: -
+```
+
+### Dead Session
+
+```bash
+$ acpx codex status
+session: 01JQWE...
+agent: npx @zed-industries/codex-acp
+pid: 12345
+status: dead
+uptime: -
+lastPromptTime: 2026-03-14T10:30:00.000Z
+exitCode: 1
+signal: -
+```
+
+## Output Formats
+
+### Text (default)
+
+```bash
+$ acpx codex status
+session: 01JQWE...
+agent: npx @zed-industries/codex-acp
+pid: 12345
+status: running
+uptime: 00:15:42
+lastPromptTime: 2026-03-14T10:30:00.000Z
+```
+
+### JSON
+
+```bash
+$ acpx --format json codex status
+{
+  "action": "status_snapshot",
+  "status": "alive",
+  "pid": 12345,
+  "summary": "queue owner healthy",
+  "uptime": "00:15:42",
+  "lastPromptTime": "2026-03-14T10:30:00.000Z",
+  "acpxRecordId": "01JQWE...",
+  "acpxSessionId": "01JQWF...",
+  "agentSessionId": "agent-123"
+}
+```
+
+When dead:
+
+```bash
+$ acpx --format json codex status
+{
+  "action": "status_snapshot",
+  "status": "dead",
+  "summary": "queue owner unavailable",
+  "exitCode": 1,
+  "signal": null,
+  "acpxRecordId": "01JQWE...",
+  "acpxSessionId": "01JQWF...",
+  "agentSessionId": "agent-123"
+}
+```
+
+When no session:
+
+```bash
+$ acpx --format json codex status
+{
+  "action": "status_snapshot",
+  "status": "no-session",
+  "summary": "no active session"
+}
+```
+
+### Quiet
+
+```bash
+$ acpx --format quiet codex status
+running
+```
+
+or
+
+```bash
+$ acpx --format quiet codex status
+dead
+```
+
+or
+
+```bash
+$ acpx --format quiet codex status
+no-session
+```
+
+## Use Cases
+
+### Check Before Sending Prompt
+
+```bash
+#!/bin/bash
+STATUS=$(acpx --format quiet codex status)
+
+if [ "$STATUS" = "no-session" ]; then
+  echo "Creating session..."
+  acpx codex sessions new
+fi
+
+acpx codex "analyze changes"
+```
+
+### Monitor Session Health
+
+```bash
+#!/bin/bash
+while true; do
+  STATUS=$(acpx --format quiet codex status)
+  echo "$(date): $STATUS"
+  sleep 10
+done
+```
+
+### Automation with Status Check
+
+```bash
+#!/bin/bash
+# Start prompt in background
+acpx codex "long analysis" &
+PID=$!
+
+# Poll status
+while kill -0 $PID 2>/dev/null; do
+  acpx --format quiet codex status
+  sleep 5
+done
+
+echo "Prompt completed"
+```
+
+### JSON Parsing
+
+```bash
+# Extract PID
+acpx --format json codex status | jq -r '.pid'
+
+# Check if running
+acpx --format json codex status | jq -r '.status == "alive"'
+
+# Get uptime
+acpx --format json codex status | jq -r '.uptime'
+```
+
+### Multi-Session Status
+
+```bash
+#!/bin/bash
+for session in backend frontend docs; do
+  echo "Session: $session"
+  acpx codex status -s $session
+  echo
+done
+```
+
+## Status vs Sessions Show
+
+### `status`
+- Shows **process status** (running/dead/no-session)
+- PID-based health check
+- Uptime for running processes
+- Last prompt timestamp
+- Lightweight, fast check
+
+### `sessions show`
+- Shows **session metadata**
+- Full session record details
+- Created/closed timestamps
+- Exit code/signal history
+- Message history count
+- More comprehensive information
+
+```bash
+# Quick process check
+acpx codex status
+
+# Full session details
+acpx codex sessions show
+```
+
+## Uptime Format
+
+Uptime is displayed in `HH:MM:SS` format:
+
+- `00:05:30` - 5 minutes, 30 seconds
+- `01:15:42` - 1 hour, 15 minutes, 42 seconds
+- `12:00:00` - 12 hours
+
+Calculated from `agentStartedAt` timestamp in session record.
+
+## Health Probe Details
+
+The health probe:
+1. Reads session record to get PID
+2. Uses `kill(pid, 0)` semantics to check if process is alive
+3. Does **not** communicate with the agent
+4. Reports `running` if PID exists, `dead` if not
+
+<Warning>
+The status check only verifies the local queue owner process is alive. It does not check:
+- Agent responsiveness
+- Network connectivity
+- Agent adapter health
+- ACP protocol state
+</Warning>
+
+## See Also
+
+- [sessions show](/cli/sessions#show) - Full session metadata
+- [sessions command](/cli/sessions) - Session management
+- [cancel command](/cli/cancel) - Cancel running prompts
+- [CLI Overview](/cli/overview) - Full command reference

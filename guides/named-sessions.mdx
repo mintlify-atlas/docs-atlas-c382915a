@@ -1,0 +1,378 @@
+---
+title: Named Sessions
+description: Run parallel workstreams in the same repository using named sessions
+---
+
+## Overview
+
+Named sessions let you run multiple independent conversations with an agent in the same directory. This is perfect for working on different features, reviewing multiple PRs, or separating backend and frontend work.
+
+## The Problem
+
+Without named sessions, you can only have one active conversation per directory:
+
+```bash
+# This works fine
+acpx codex 'implement user login'
+
+# But this would continue the same conversation
+acpx codex 'review PR #842'
+# The agent still has context from the login discussion!
+```
+
+Named sessions solve this by adding an extra dimension to session scoping.
+
+## Creating Named Sessions
+
+Use the `--name` flag when creating a session:
+
+```bash
+acpx codex sessions new --name backend
+acpx codex sessions new --name frontend
+```
+
+Or use the shorthand `-s` flag:
+
+```bash
+acpx codex sessions new --name api
+```
+
+## Using Named Sessions
+
+Once created, reference the session name with `-s` or `--session`:
+
+```bash
+# Work on backend
+acpx codex -s backend 'implement token pagination'
+
+# Switch to frontend work
+acpx codex -s frontend 'update login form validation'
+
+# Back to backend
+acpx codex -s backend 'add rate limiting'
+```
+
+Each named session maintains its own:
+- Conversation history
+- Agent process
+- Queue state
+
+## Parallel Workflow Example
+
+Here's a complete workflow showing parallel sessions in action:
+
+<Steps>
+  <Step title="Create sessions">
+    ```bash
+    acpx codex sessions new --name bugfix
+    acpx codex sessions new --name release
+    ```
+  </Step>
+  <Step title="Work on bug fix">
+    ```bash
+    acpx codex -s bugfix 'isolate flaky checkout test'
+    acpx codex -s bugfix 'add regression test'
+    ```
+  </Step>
+  <Step title="Switch to release prep">
+    ```bash
+    acpx codex -s release 'draft release notes from recent commits'
+    acpx codex -s release 'update changelog'
+    ```
+  </Step>
+  <Step title="Continue bug fix">
+    ```bash
+    acpx codex -s bugfix 'verify the fix with integration tests'
+    ```
+
+    The agent remembers the bugfix context, not the release work!
+  </Step>
+</Steps>
+
+## Use Cases
+
+### Feature Development
+
+Separate different features:
+
+```bash
+acpx codex sessions new --name auth
+acpx codex sessions new --name payments
+
+# Auth work
+acpx codex -s auth 'implement OAuth2 flow'
+acpx codex -s auth 'add token refresh logic'
+
+# Payment work
+acpx codex -s payments 'integrate Stripe webhooks'
+acpx codex -s payments 'handle payment failures'
+```
+
+### PR Review
+
+Review multiple PRs in parallel:
+
+```bash
+acpx codex sessions new --name pr-842
+acpx codex sessions new --name pr-843
+
+# Review first PR
+acpx codex -s pr-842 'Review PR #842 for security issues'
+acpx codex -s pr-842 'Check test coverage'
+
+# Review second PR
+acpx codex -s pr-843 'Review PR #843 for performance regressions'
+```
+
+### Backend/Frontend Split
+
+Separate concerns in a monorepo:
+
+```bash
+acpx codex sessions new --name api
+acpx codex sessions new --name ui
+
+# API work
+acpx codex -s api 'add pagination to user endpoints'
+acpx codex -s api 'write API integration tests'
+
+# UI work
+acpx codex -s ui 'implement infinite scroll'
+acpx codex -s ui 'add loading states'
+```
+
+### Experimentation
+
+Try different approaches:
+
+```bash
+acpx codex sessions new --name approach-a
+acpx codex sessions new --name approach-b
+
+# Try first approach
+acpx codex -s approach-a 'implement caching with Redis'
+
+# Try alternative
+acpx codex -s approach-b 'implement caching with in-memory store'
+
+# Compare results
+acpx codex -s approach-a 'benchmark the Redis implementation'
+acpx codex -s approach-b 'benchmark the memory implementation'
+```
+
+## Managing Named Sessions
+
+### List All Sessions
+
+```bash
+acpx codex sessions list
+```
+
+Output shows all sessions including names:
+
+```
+ses_abc123  backend   /home/user/shop    2026-03-14T10:30:00Z
+ses_def456  frontend  /home/user/shop    2026-03-14T09:15:00Z
+ses_ghi789  api       /home/user/shop    2026-03-14T08:00:00Z [closed]
+```
+
+### Show Specific Session
+
+Inspect a named session:
+
+```bash
+acpx codex sessions show backend
+```
+
+### View Session History
+
+See the conversation history for a named session:
+
+```bash
+acpx codex sessions history backend --limit 10
+```
+
+### Close Named Session
+
+Close a specific named session:
+
+```bash
+acpx codex sessions close backend
+```
+
+The other sessions remain active.
+
+## Session Naming Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use descriptive names">
+    Good names describe the work:
+    - `pr-842` - Clear, references specific PR
+    - `auth-refactor` - Describes the task
+    - `perf-investigation` - Indicates purpose
+
+    Avoid generic names:
+    - `temp` - Not descriptive
+    - `test` - Too vague
+    - `misc` - Unclear purpose
+  </Accordion>
+  <Accordion title="Keep names short">
+    Session names appear in commands frequently:
+
+    ```bash
+    # Good - easy to type
+    acpx codex -s api 'add endpoint'
+
+    # Bad - tedious to type
+    acpx codex -s user-authentication-feature-branch-development 'add endpoint'
+    ```
+  </Accordion>
+  <Accordion title="Use consistent patterns">
+    Establish a naming convention:
+    - PR reviews: `pr-NUMBER`
+    - Features: `feature-NAME`
+    - Bug fixes: `bug-DESCRIPTION`
+    - Experiments: `exp-DESCRIPTION`
+  </Accordion>
+</AccordionGroup>
+
+## Advanced: Cross-Directory Named Sessions
+
+Named sessions work across directory scopes too:
+
+```bash
+# In backend directory
+cd ~/repos/shop/backend
+acpx codex sessions new --name api
+acpx codex -s api 'review user endpoints'
+
+# In frontend directory - different session, same name
+cd ~/repos/shop/frontend
+acpx codex sessions new --name api
+acpx codex -s api 'review API client code'
+```
+
+Session scope key is `(agentCommand, directory, name)`, so same name in different directories = different sessions.
+
+## Combining with Other Features
+
+### Named Sessions + Fire-and-Forget
+
+Queue prompts to specific sessions without waiting:
+
+```bash
+acpx codex -s backend --no-wait 'run full test suite'
+acpx codex -s frontend --no-wait 'build production bundle'
+
+# Both run in parallel, you get control back immediately
+```
+
+### Named Sessions + Status
+
+Check status of a specific named session:
+
+```bash
+acpx codex -s backend status
+```
+
+### Named Sessions + Cancel
+
+Cancel a running prompt in a specific session:
+
+```bash
+acpx codex -s backend cancel
+```
+
+## Real-World Scenario
+
+Here's a complete example showing named sessions in a real workflow:
+
+```bash
+# Review a PR in dedicated session
+acpx --cwd ~/repos/shop codex sessions new --name pr-842
+acpx --cwd ~/repos/shop codex -s pr-842 \
+  'Review PR #842 for regressions and propose a minimal fix'
+
+# While that's running, start another session for different work
+acpx --cwd ~/repos/shop codex sessions new --name hotfix
+acpx --cwd ~/repos/shop codex -s hotfix \
+  'Fix the critical auth bug in production'
+
+# Check status of each
+acpx --cwd ~/repos/shop codex -s pr-842 status
+acpx --cwd ~/repos/shop codex -s hotfix status
+
+# Continue PR review
+acpx --cwd ~/repos/shop codex -s pr-842 \
+  'Draft commit message and rollout checklist'
+
+# Close when done
+acpx --cwd ~/repos/shop codex sessions close pr-842
+acpx --cwd ~/repos/shop codex sessions close hotfix
+```
+
+## Ensure with Named Sessions
+
+The `ensure` command works with names too:
+
+```bash
+acpx codex sessions ensure --name backend
+```
+
+This returns the existing `backend` session or creates it if missing.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Wrong session is being used">
+    Make sure you're using the `-s` flag:
+
+    ```bash
+    # Without -s, uses default session
+    acpx codex 'do something'
+
+    # With -s, uses named session
+    acpx codex -s backend 'do something'
+    ```
+  </Accordion>
+  <Accordion title="Can't find named session">
+    Check if the session exists:
+
+    ```bash
+    acpx codex sessions list
+    ```
+
+    Create it if missing:
+
+    ```bash
+    acpx codex sessions new --name backend
+    ```
+  </Accordion>
+  <Accordion title="Sessions interfering with each other">
+    Each named session is completely independent. If they seem to share context, verify you're using different names:
+
+    ```bash
+    acpx codex sessions show session-name-1
+    acpx codex sessions show session-name-2
+    ```
+
+    Check the session IDs are different.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Session Management" icon="layers" href="/guides/session-management">
+    Learn more about session lifecycle and auto-resume
+  </Card>
+  <Card title="Output Formats" icon="code" href="/guides/output-formats">
+    Use JSON output for automation with named sessions
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Set default behaviors for named sessions
+  </Card>
+  <Card title="CLI Reference" icon="book" href="/cli/overview">
+    Full command reference and options
+  </Card>
+</CardGroup>

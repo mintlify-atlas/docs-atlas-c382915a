@@ -1,0 +1,277 @@
+---
+title: prompt
+description: Send prompts to persistent ACP sessions
+---
+
+## Overview
+
+The `prompt` command sends prompts to a persistent session. Sessions are scoped by agent command, working directory, and optional session name.
+
+## Syntax
+
+```bash
+acpx [global_options] <agent> prompt [prompt_options] [prompt_text...]
+acpx [global_options] prompt [prompt_options] [prompt_text...]  # defaults to codex
+acpx [global_options] <agent> [prompt_options] [prompt_text...]  # implicit prompt
+acpx [global_options] [prompt_text...]                           # implicit prompt, defaults to codex
+```
+
+## Options
+
+<ParamField path="-s, --session" type="string">
+  Use named session instead of cwd default.
+</ParamField>
+
+<ParamField path="--no-wait" type="boolean">
+  Queue prompt and return immediately if session is busy. Default behavior waits for completion.
+</ParamField>
+
+<ParamField path="-f, --file" type="string">
+  Read prompt text from file. Use `-` to read from stdin.
+</ParamField>
+
+## Behavior
+
+### Session Lookup
+
+1. Detects the nearest git root by checking for `.git` while walking up from working directory
+2. If git root found, walks from cwd up to git root (inclusive)
+3. If no git root, only checks exact cwd (no parent-directory walk)
+4. At each directory, finds first active (non-closed) session matching `(agentCommand, dir, optionalName)`
+5. If found, uses that session for prompt
+6. If not found, exits with code `4` and prints guidance to run `sessions new`
+
+<Warning>
+Prompt commands **do not** auto-create sessions. You must explicitly create a session first using `sessions new` or `sessions ensure`.
+</Warning>
+
+### Auto-Resume
+
+If a saved session's process is dead, `acpx` automatically:
+1. Respawns the agent
+2. Attempts `session/load` to restore state
+3. Falls back to `session/new` if loading fails
+4. Sends the prompt
+
+### Prompt Queueing
+
+When a prompt is already running for a session:
+
+1. Other `acpx` invocations enqueue prompts through local IPC
+2. Queue owner process drains prompts one-by-one after each turn completes
+3. Submitter blocks until completion (default) or exits immediately with `--no-wait`
+4. After queue drains, owner waits for new work up to TTL (default 300s)
+
+### Session Updates
+
+After prompt completion, `acpx` updates session metadata:
+- `lastUsedAt` timestamp
+- `lastPromptAt` timestamp
+- Lightweight turn history preview (role, timestamp, text preview)
+
+## Exit Codes
+
+| Code | Meaning |
+|------|----------|
+| `0` | Success |
+| `1` | Agent/protocol/runtime error |
+| `2` | CLI usage error |
+| `3` | Timeout |
+| `4` | No session found |
+| `5` | Permission denied |
+| `130` | Interrupted (SIGINT/SIGTERM) |
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Create session first
+acpx codex sessions new
+
+# Explicit prompt command
+acpx codex prompt "fix the failing tests"
+
+# Implicit prompt (recommended)
+acpx codex "fix the failing tests"
+
+# Default agent (codex)
+acpx "fix the failing tests"
+```
+
+### Named Sessions
+
+```bash
+# Create named session
+acpx codex sessions new --name backend
+
+# Prompt in named session
+acpx codex -s backend "fix API timeout"
+acpx codex --session backend "optimize database queries"
+```
+
+### Prompt from File
+
+```bash
+# Read from file
+acpx codex --file prompt.md
+acpx codex --file /path/to/instructions.txt
+
+# Read from stdin
+echo "fix the tests" | acpx codex
+cat instructions.txt | acpx codex
+acpx codex --file -
+
+# Combine stdin with additional text
+acpx codex --file - "also check lint warnings"
+```
+
+### Queue Behavior
+
+```bash
+# First prompt starts immediately
+acpx codex "analyze codebase" &
+
+# Second prompt queues and waits
+acpx codex "review findings"
+
+# Third prompt queues but returns immediately
+acpx codex --no-wait "draft documentation"
+```
+
+### Different Agents
+
+```bash
+acpx pi "review recent changes"
+acpx openclaw "analyze architecture"
+acpx claude "refactor auth module"
+```
+
+### With Global Options
+
+```bash
+# Auto-approve all permissions
+acpx --approve-all codex "apply patch and run tests"
+
+# Custom working directory
+acpx --cwd ~/repos/api codex "review auth middleware"
+
+# Timeout control
+acpx --timeout 120 codex "investigate flaky tests"
+
+# Custom TTL for queue owner
+acpx --ttl 30 codex "quick iteration"
+
+# Verbose output
+acpx --verbose codex "debug adapter issues"
+```
+
+### Output Formats
+
+```bash
+# JSON output for automation
+acpx --format json codex "review changed files"
+
+# Strict JSON (suppress stderr)
+acpx --format json --json-strict codex "machine output"
+
+# Quiet mode (assistant text only)
+acpx --format quiet codex "final summary"
+```
+
+## Interrupting Prompts
+
+Press `Ctrl+C` during a running prompt:
+
+1. Sends cooperative `session/cancel` to the agent
+2. Waits briefly for `stopReason=cancelled` response
+3. Force-kills only if graceful cancel fails
+
+```bash
+acpx codex "long-running analysis"
+# Press Ctrl+C to cancel
+```
+
+## Error Cases
+
+### No Session Found
+
+```bash
+$ acpx codex "fix tests"
+⚠ No acpx session found (searched up to /home/user/project).
+Create one: acpx codex sessions new
+```
+
+Exit code: `4`
+
+### Named Session Not Found
+
+```bash
+$ acpx codex -s backend "fix API"
+⚠ No acpx session found (searched up to /home/user/project).
+Create one: acpx codex sessions new --name backend
+```
+
+Exit code: `4`
+
+### Empty Prompt
+
+```bash
+$ acpx codex --file empty.txt
+Error: Prompt from --file is empty
+```
+
+Exit code: `2` (usage error)
+
+## Common Patterns
+
+### PR Review Workflow
+
+```bash
+# Create dedicated session
+acpx codex sessions new --name pr-842
+
+# Initial review
+acpx codex -s pr-842 'Review PR #842, list risks, propose fix'
+
+# Follow-up
+acpx codex -s pr-842 'Draft commit message and rollout checklist'
+
+# Close when done
+acpx codex sessions close pr-842
+```
+
+### Multi-Stream Development
+
+```bash
+# Separate workstreams
+acpx codex sessions new --name backend
+acpx codex sessions new --name frontend
+acpx codex sessions new --name docs
+
+# Work in parallel
+acpx codex -s backend "fix checkout timeout" &
+acpx codex -s frontend "update payment UI" &
+acpx codex -s docs "document retry behavior" &
+```
+
+### Automated Workflows
+
+```bash
+#!/bin/bash
+# Create session if needed
+acpx codex sessions ensure
+
+# Queue analysis
+acpx --format json codex "analyze test failures" > analysis.json
+
+# Process results
+jq -r '.text' analysis.json
+```
+
+## See Also
+
+- [exec command](/cli/exec) - One-shot prompts without session
+- [sessions command](/cli/sessions) - Session management
+- [cancel command](/cli/cancel) - Cancel running prompts
+- [status command](/cli/status) - Check session status

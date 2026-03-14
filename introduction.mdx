@@ -1,0 +1,178 @@
+---
+title: Introduction
+description: Learn what acpx is and why it exists - a headless CLI client for the Agent Client Protocol (ACP)
+---
+
+# Introduction to acpx
+
+acpx is a headless CLI client for the [Agent Client Protocol (ACP)](https://agentclientprotocol.com), designed for AI agents and orchestrators to talk to coding agents over a structured protocol instead of PTY scraping.
+
+<Note>
+  acpx is currently in alpha. The CLI and runtime interfaces may change until it stabilizes.
+</Note>
+
+## Why acpx?
+
+Your agents love acpx! 🤖❤️ They hate having to scrape characters from a PTY session 😤
+
+When one AI agent needs to delegate work to another coding agent, the traditional approach has been to spawn a terminal session and scrape the output. This is fragile, error-prone, and loses structured information.
+
+**acpx changes that.** Instead of PTY scraping, you get:
+
+- **Structured output**: Typed ACP messages (thinking, tool calls, diffs) instead of ANSI scraping
+- **One command surface**: Works with Pi, OpenClaw, Codex, Claude, and other ACP-compatible agents
+- **Built for automation**: Designed for agent-to-agent communication, not just humans
+
+## Key Features
+
+### Persistent Sessions
+
+Multi-turn conversations that survive across invocations, scoped per repository:
+
+```bash
+acpx codex sessions new
+acpx codex "find the flaky test and fix it"
+# Later, in the same directory
+acpx codex "now add a test for the timeout case"
+```
+
+### Named Sessions
+
+Run parallel workstreams in the same repo:
+
+```bash
+acpx codex -s backend "implement token pagination"
+acpx codex -s frontend "update the API client"
+acpx codex -s docs "document the new endpoint"
+```
+
+### Prompt Queueing
+
+Submit prompts while one is already running - they execute in order:
+
+```bash
+acpx codex "run the test suite"
+acpx codex --no-wait "fix any failures"  # Queued for later
+```
+
+### Cooperative Cancellation
+
+Gracefully cancel in-flight prompts without losing session state:
+
+```bash
+acpx codex cancel  # Sends ACP session/cancel
+```
+
+### Structured JSON Output
+
+Perfect for automation and orchestration:
+
+```bash
+acpx --format json codex exec "review this PR" | jq -r 'select(.type=="tool_call")'
+```
+
+### Any ACP Agent
+
+Built-in registry plus `--agent` escape hatch for custom servers:
+
+```bash
+acpx pi "review recent changes"
+acpx openclaw "summarize active session state"
+acpx codex "fix the failing typecheck"
+acpx claude "refactor auth middleware"
+acpx --agent ./my-custom-acp-server "do something"
+```
+
+## Real-World Example
+
+Here's what a typical acpx session looks like:
+
+```bash
+$ acpx codex sessions new
+$ acpx codex "find the flaky test and fix it"
+
+[thinking] Investigating test suite for flaky failures
+
+[tool] Run npm test -- --reporter=verbose (running)
+[tool] Run npm test -- --reporter=verbose (completed)
+  output:
+    ✓ auth.login (0.8s)
+    ✗ checkout.submit (timed out after 5000ms)
+    ✓ cart.add (0.3s)
+
+[thinking] Found it — checkout.submit has a race condition in the async setup
+
+[tool] Edit src/checkout.test.ts (completed)
+  output:
+    Success. Updated 1 file.
+
+[tool] Run npm test -- checkout.submit (completed)
+  output:
+    ✓ checkout.submit (0.4s)
+
+Fixed: added `await` to the setup hook in checkout.submit. The test was
+reading stale state from the previous run.
+
+[done] end_turn
+```
+
+## Use Cases
+
+### Agent-to-Agent Delegation
+
+Let your orchestration agent delegate coding tasks to specialized agents:
+
+```bash
+acpx codex "implement the new authentication endpoint"
+acpx codex -s tests "write integration tests for auth"
+```
+
+### CI/CD Integration
+
+Run agents in your CI pipeline with machine-readable output:
+
+```bash
+acpx --format json --approve-all codex exec "run linter and fix all issues"
+```
+
+### Parallel Workflows
+
+Work on multiple features simultaneously in the same repository:
+
+```bash
+acpx codex -s feature-a "add user profile endpoint"
+acpx codex -s feature-b "optimize database queries"
+acpx codex -s docs "update API documentation"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install acpx and configure your first agent
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get from zero to your first working command
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/cli/overview">
+    Complete command and flag reference
+  </Card>
+  <Card title="Concepts" icon="book" href="/concepts/sessions">
+    Understand sessions, queues, and permissions
+  </Card>
+</CardGroup>
+
+## Supported Agents
+
+acpx works with any ACP-compatible agent. Built-in support includes:
+
+- **Pi** - Pi Coding Agent
+- **OpenClaw** - OpenClaw ACP bridge
+- **Codex** - Codex CLI from OpenAI
+- **Claude** - Claude Code from Anthropic
+- **Gemini** - Gemini CLI from Google
+- **Cursor** - Cursor CLI
+- **GitHub Copilot** - GitHub Copilot CLI
+- And many more...
+
+See the [full list of supported agents](/agents) for details.

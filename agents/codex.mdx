@@ -1,0 +1,274 @@
+---
+title: Codex Agent
+description: Using Codex CLI with acpx through codex-acp
+---
+
+Codex is a powerful CLI agent from OpenAI. `acpx` integrates Codex through the `codex-acp` adapter maintained by Zed Industries.
+
+## Registry Information
+
+- **Built-in name**: `codex`
+- **Adapter**: [codex-acp](https://github.com/zed-industries/codex-acp)
+- **Upstream tool**: [Codex CLI](https://codex.openai.com)
+
+## Prerequisites
+
+You need the Codex CLI installed and configured:
+
+```bash
+# Install and authenticate with Codex
+# Visit: https://codex.openai.com
+```
+
+The `codex-acp` adapter is auto-downloaded via `npx` when you first use `acpx codex`.
+
+## Basic Usage
+
+### Create a Session
+
+```bash
+acpx codex sessions new
+```
+
+### Send a Prompt
+
+```bash
+acpx codex "fix the failing tests"
+```
+
+### One-Shot Execution
+
+```bash
+acpx codex exec "summarize this repo"
+```
+
+## Example Workflows
+
+### Test Debugging
+
+```bash
+acpx codex sessions new
+acpx codex "find the flaky test and fix it"
+```
+
+Codex will investigate, identify the issue, apply a fix, and verify:
+
+```
+[thinking] Investigating test suite for flaky failures
+
+[tool] Run npm test -- --reporter=verbose (completed)
+  output:
+    ✓ auth.login (0.8s)
+    ✗ checkout.submit (timed out after 5000ms)
+    ✓ cart.add (0.3s)
+
+[thinking] Found it — checkout.submit has a race condition
+
+[tool] Edit src/checkout.test.ts (completed)
+  output:
+    Success. Updated 1 file.
+
+[tool] Run npm test -- checkout.submit (completed)
+  output:
+    ✓ checkout.submit (0.4s)
+
+Fixed: added `await` to the setup hook.
+```
+
+### Code Refactoring
+
+```bash
+acpx codex -s refactor "extract payment logic into a service"
+```
+
+### Multi-Turn Conversations
+
+```bash
+acpx codex sessions new --name api
+acpx codex -s api "review the auth endpoint"
+acpx codex -s api "now add rate limiting"
+acpx codex -s api "write integration tests for it"
+```
+
+## Runtime Configuration
+
+Codex supports runtime config options through `acpx` session controls.
+
+### Set Mode
+
+```bash
+acpx codex set-mode auto
+```
+
+Mode values are adapter-defined. Refer to `codex-acp` documentation for supported modes.
+
+### Set Config Options
+
+Codex-acp currently supports:
+- `mode`
+- `model`
+- `reasoning_effort`
+
+```bash
+acpx codex set reasoning_effort high
+acpx codex set model gpt-4
+```
+
+### Thought Level Compatibility Alias
+
+`acpx` provides a `thought_level` alias for backward compatibility:
+
+```bash
+acpx codex set thought_level high
+```
+
+This is automatically translated to `reasoning_effort` when sent to codex-acp.
+
+<Note>
+The `thought_level` alias is specific to Codex. Other agents may not support it.
+</Note>
+
+## Permission Modes
+
+```bash
+# Auto-approve all operations
+acpx --approve-all codex "apply the patch and run tests"
+
+# Approve reads only (default)
+acpx --approve-reads codex "analyze the codebase structure"
+
+# Deny all operations
+acpx --deny-all codex "explain the auth flow without accessing files"
+```
+
+## Default Agent Shortcut
+
+Codex is the default agent. The `exec` command routes to `codex` when no agent is specified:
+
+```bash
+acpx exec "summarize this repo"
+# Same as:
+acpx codex exec "summarize this repo"
+```
+
+Override the default in config:
+
+```json
+{
+  "defaultAgent": "claude"
+}
+```
+
+## Session Management
+
+### List Sessions
+
+```bash
+acpx codex sessions list
+```
+
+### Inspect Current Session
+
+```bash
+acpx codex sessions show
+```
+
+### View History
+
+```bash
+acpx codex sessions history --limit 10
+```
+
+### Close Session
+
+```bash
+acpx codex sessions close
+```
+
+## Advanced Usage
+
+### Prompt from File
+
+```bash
+acpx codex --file prompt.md
+```
+
+### Prompt from Stdin
+
+```bash
+echo "fix the auth bug" | acpx codex
+```
+
+### Queue Management
+
+```bash
+# Queue without waiting
+acpx codex --no-wait "draft migration plan"
+
+# Cancel in-flight prompt
+acpx codex cancel
+```
+
+### Fire-and-Forget with TTL
+
+```bash
+# Keep queue owner alive for follow-ups
+acpx --ttl 60 codex "review this PR"
+acpx codex "check the test coverage too"
+```
+
+## Output Formats
+
+### JSON Output
+
+```bash
+acpx --format json codex exec "list changed files" \
+  | jq -r 'select(.type=="tool_call") | [.status, .title] | @tsv'
+```
+
+### Quiet Mode
+
+```bash
+acpx --format quiet codex "give me a 3-line summary"
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Codex CLI not authenticated">
+    Make sure Codex is set up:
+    ```bash
+    codex --version
+    codex auth status
+    ```
+    If not authenticated, follow the [Codex setup guide](https://codex.openai.com).
+  </Accordion>
+
+  <Accordion title="Adapter fails to download">
+    The codex-acp adapter is fetched via npx. Check your npm registry:
+    ```bash
+    npx @zed-industries/codex-acp --version
+    ```
+  </Accordion>
+
+  <Accordion title="Invalid params on set-mode">
+    Mode values are adapter-defined. An `Invalid params` error means the mode is not supported by codex-acp. Check the adapter docs for valid modes.
+  </Accordion>
+</AccordionGroup>
+
+## Related Links
+
+<CardGroup cols={2}>
+  <Card title="Codex CLI" icon="globe" href="https://codex.openai.com">
+    Official Codex documentation
+  </Card>
+  <Card title="codex-acp Adapter" icon="github" href="https://github.com/zed-industries/codex-acp">
+    ACP adapter for Codex
+  </Card>
+  <Card title="Session Management" icon="list" href="/guides/session-management">
+    Learn about sessions
+  </Card>
+  <Card title="Output Formats" icon="file-code" href="/guides/output-formats">
+    JSON, text, and quiet modes
+  </Card>
+</CardGroup>

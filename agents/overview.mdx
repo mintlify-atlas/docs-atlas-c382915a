@@ -1,0 +1,106 @@
+---
+title: Built-in Agents
+description: Overview of built-in ACP agents and how to select them
+---
+
+`acpx` includes built-in support for popular ACP-compatible coding agents. Each agent has a registered name that maps to an adapter command, which `acpx` auto-downloads with `npx` on first use.
+
+## Agent Registry
+
+The following agents are built into `acpx`:
+
+| Agent | Adapter | Wraps |
+|-------|---------|-------|
+| `pi` | [pi-acp](https://github.com/svkozak/pi-acp) | [Pi Coding Agent](https://github.com/mariozechner/pi) |
+| `openclaw` | native (`openclaw acp`) | [OpenClaw ACP bridge](https://github.com/openclaw/openclaw) |
+| `codex` | [codex-acp](https://github.com/zed-industries/codex-acp) | [Codex CLI](https://codex.openai.com) |
+| `claude` | [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp) | [Claude Code](https://claude.ai/code) |
+| `gemini` | native (`gemini --acp`) | [Gemini CLI](https://github.com/google/gemini-cli) |
+| `cursor` | native (`cursor-agent acp`) | [Cursor CLI](https://cursor.com/docs/cli/acp) |
+| `copilot` | native (`copilot --acp --stdio`) | [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-chat/use-copilot-chat-in-the-command-line) |
+| `droid` | native (`droid exec --output-format acp`) | [Factory Droid](https://www.factory.ai) |
+| `iflow` | native (`iflow --experimental-acp`) | [iFlow CLI](https://github.com/iflow-ai/iflow-cli) |
+| `kilocode` | `npx -y @kilocode/cli acp` | [Kilocode](https://kilocode.ai) |
+| `kimi` | native (`kimi acp`) | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) |
+| `kiro` | native (`kiro-cli acp`) | [Kiro CLI](https://kiro.dev) |
+| `opencode` | `npx -y opencode-ai acp` | [OpenCode](https://opencode.ai) |
+| `qwen` | native (`qwen --acp`) | [Qwen Code](https://github.com/QwenLM/qwen-code) |
+
+## How Agent Selection Works
+
+When you invoke `acpx` with an agent name, it:
+
+1. Normalizes the name to lowercase
+2. Looks up the command in the agent registry
+3. Merges any config overrides from `~/.acpx/config.json` or `.acpxrc.json`
+4. Spawns the adapter with the resolved command
+
+```bash
+acpx pi "review this code"
+acpx openclaw "find the bug"
+acpx codex "fix the tests"
+acpx claude "refactor auth module"
+```
+
+If the agent name is not in the registry and no `--agent` flag is provided, `acpx` treats it as a raw command:
+
+```bash
+acpx my-agent "do something"  # spawns: my-agent --args
+```
+
+<Note>
+The first time you use a built-in agent that requires an npx-installed adapter, `acpx` will download it automatically. This may take a few seconds.
+</Note>
+
+## Default Agent
+
+The default agent is `codex`. When you use the `exec` command without an agent prefix, it routes to `codex`:
+
+```bash
+acpx exec "summarize this repo"  # same as: acpx codex exec "..."
+```
+
+You can override the default in your config:
+
+```json
+{
+  "defaultAgent": "claude"
+}
+```
+
+## The `--agent` Escape Hatch
+
+For custom ACP servers or ad-hoc testing, use `--agent` to bypass the registry entirely:
+
+```bash
+acpx --agent ./my-custom-acp-server "do something"
+acpx --agent "node dev/agent.js --debug" "test this"
+```
+
+This is useful for:
+- Local development of custom agents
+- Testing experimental ACP servers
+- Using one-off agent configurations without modifying config files
+
+See [Custom Agents](/agents/custom-agents) for more details.
+
+## Agent-Specific Pages
+
+<CardGroup cols={2}>
+  <Card title="Pi" icon="robot" href="/agents/pi">
+    Pi Coding Agent via pi-acp adapter
+  </Card>
+  <Card title="OpenClaw" icon="claw-marks" href="/agents/openclaw">
+    OpenClaw ACP bridge (native support)
+  </Card>
+  <Card title="Codex" icon="code" href="/agents/codex">
+    Codex CLI via codex-acp adapter
+  </Card>
+  <Card title="Claude" icon="message-bot" href="/agents/claude">
+    Claude Code via claude-agent-acp adapter
+  </Card>
+</CardGroup>
+
+<Card title="Custom Agents" icon="wrench" href="/agents/custom-agents">
+  Learn how to integrate your own ACP servers
+</Card>

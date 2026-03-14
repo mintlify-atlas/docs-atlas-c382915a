@@ -1,0 +1,425 @@
+---
+title: Crash Recovery
+description: How acpx transparently recovers from dead agent processes using PID tracking and session/load fallback
+---
+
+## Overview
+
+acpx automatically detects and recovers from crashed agent processes. When you submit a prompt to a session whose agent died, acpx:
+
+1. Detects the dead PID
+2. Respawns the agent
+3. Attempts `session/load` to restore state
+4. Falls back to `session/new` if loading fails
+5. Continues transparently
+
+<Note>
+Crash recovery is automatic—you don't need to manually restart sessions after agent crashes.
+</Note>
+
+## Dead Process Detection
+
+### PID Tracking in Session Metadata
+
+Every session record stores the agent process ID:
+
+```json
+{
+  "schema": 5,
+  "acpxRecordId": "019c4b2a-1234-5678-9abc-def012345678",
+  "acpSessionId": "019c4b2a-1234-5678-9abc-def012345678",
+  "agentCommand": "npx @zed-industries/codex-acp",
+  "cwd": "/home/user/projects/myapp",
+  "pid": 12345,
+  "agentStartedAt": "2026-03-14T01:30:00.000Z",
+  "lastUsedAt": "2026-03-14T01:35:00.000Z",
+  "closed": false
+}
+```
+
+### Liveness Check
+
+Before reconnecting to a saved session, acpx checks if the stored PID is alive:
+
+```typescript
+export function isProcessAlive(pid: number): boolean {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  
+  try {
+    process.kill(pid, 0);  // signal 0 = test if process exists
+    return true;
+  } catch {
+    return false;
+  }
+}
+```
+
+<Accordion title="Why signal 0?">
+Sending signal `0` to a process doesn't actually send a signal—it's a portable way to test if a PID exists and is accessible.
+</Accordion>
+
+### Additional Process Validation
+
+On Linux, acpx also validates the process command line:
+
+```typescript
+// Read /proc/<pid>/cmdline
+const payload = await fs.readFile(`/proc/${pid}/cmdline`, 'utf8');
+const argv = payload.split('\0');
+
+// Check if executable matches expected agent command
+const executableBase = path.basename(argv[0]);
+const expectedBase = path.basename(expectedToken);
+return executableBase === expectedBase;
+```
+
+This prevents accidentally killing unrelated processes with recycled PIDs.
+
+## session/load Fallback to session/new
+
+### The Reconnection Flow
+
+When a prompt arrives for a session with a dead PID:
+
+```typescript
+const storedProcessAlive = isProcessAlive(record.pid);
+const shouldReconnect = Boolean(record.pid) && !storedProcessAlive;
+
+if (shouldReconnect) {
+  // 1. Spawn new agent process
+  await client.start();
+  
+  // 2. Try to load saved session
+  if (client.supportsLoadSession()) {
+    try {
+      await client.loadSession(record.acpSessionId, record.cwd);
+      resumed = true;
+    } catch (error) {
+      // 3. Fall back to fresh session if load fails
+      if (shouldFallbackToNewSession(error, record)) {
+        const createdSession = await client.createSession(record.cwd);
+        sessionId = createdSession.sessionId;
+      }
+    }
+  }
+}
+```
+
+### When to Fall Back
+
+The `shouldFallbackToNewSession` logic:
+
+```typescript
+function shouldFallbackToNewSession(error: unknown, record: SessionRecord): boolean {
+  // Never fall back on timeout or interrupt
+  if (error instanceof TimeoutError || error instanceof InterruptedError) {
+    return false;
+  }
+  
+  // ACP ResourceNotFound error
+  if (isAcpResourceNotFoundError(error)) {
+    return true;
+  }
+  
+  // Empty sessions (no agent turns yet) might fail with internal errors
+  if (!sessionHasAgentMessages(record)) {
+    if (isAcpQueryClosedBeforeResponseError(error)) {
+      return true;
+    }
+    
+    const acp = extractAcpError(error);
+    if (acp?.code === -32603) {  // JSON-RPC internal error
+      return true;
+    }
+  }
+  
+  return false;
+}
+```
+
+<Warning>
+If the session has agent messages but load fails with a non-recoverable error, acpx propagates the error instead of silently creating a fresh session.
+</Warning>
+
+### Filtered Output on Fallback
+
+When falling back to `session/new`, acpx filters the failed `session/load` traffic from output:
+
+```typescript
+function filterRecoverableLoadFallbackOutput(messages: AcpJsonRpcMessage[]) {
+  // Remove session/load request and error response
+  const failedLoadRequestIds = new Set<string>();
+  
+  for (const message of messages) {
+    if (isLoadRequest(message)) {
+      failedLoadRequestIds.add(message.id);
+    }
+  }
+  
+  return messages.filter(message => !failedLoadRequestIds.has(message.id));
+}
+```
+
+This prevents confusing error messages from appearing when recovery succeeds.
+
+## PID Tracking in Session Metadata
+
+### When PID Is Updated
+
+The session record's `pid` field is updated:
+
+1. **On session creation**: Set to spawned agent's PID
+2. **After reconnection**: Updated with new process PID
+3. **On close**: Cleared to `undefined`
+
+```typescript
+// After spawning agent
+record.pid = lifecycle.pid;
+record.agentStartedAt = lifecycle.startedAt;
+
+// After closing session
+record.pid = undefined;
+record.closed = true;
+record.closedAt = isoNow();
+```
+
+### Lifecycle Snapshot
+
+The ACP client tracks process lifecycle:
+
+```typescript
+type AgentLifecycleSnapshot = {
+  pid?: number;
+  startedAt?: string;
+  lastExit?: {
+    timestamp: string;
+    reason: 'normal' | 'signal' | 'error';
+    exitCode?: number;
+    signal?: string;
+    unexpectedDuringPrompt: boolean;
+  };
+};
+```
+
+This data is persisted to the session record:
+
+```typescript
+applyLifecycleSnapshotToRecord(record, client.getAgentLifecycleSnapshot());
+```
+
+## Transparent Crash Recovery
+
+### Example: Agent Crashes Mid-Session
+
+```bash
+# Initial session
+acpx codex sessions new
+acpx codex 'analyze this codebase'
+
+# ... agent crashes (OOM, segfault, etc.) ...
+
+# Next prompt detects dead PID and recovers
+acpx codex 'continue analysis'
+```
+
+Output:
+```
+[acpx] saved session pid 12345 is dead; respawning agent and attempting session/load
+[thinking] Continuing analysis...
+```
+
+### Example: Verbose Recovery Logging
+
+```bash
+acpx --verbose codex 'task after crash'
+```
+
+Output:
+```
+[acpx] saved session pid 12345 is dead; respawning agent and attempting session/load
+[acpx] prompt.connect_and_load: 1234ms
+[acpx] prompt.agent_turn: 5678ms
+[acpx] prompt.total: 6912ms
+```
+
+### Example: Recovery with Mode Replay
+
+If the session had a desired mode set:
+
+```bash
+acpx codex set-mode auto
+# ... crash ...
+acpx codex 'next prompt'
+```
+
+Output:
+```
+[acpx] replayed desired mode auto on fresh ACP session 019c...
+```
+
+## Crash Scenarios
+
+### Scenario 1: Agent OOM Kill
+
+**Cause**: Agent process killed by OS due to memory pressure
+
+**Detection**:
+```typescript
+record.lastExit = {
+  timestamp: '2026-03-14T01:35:00.000Z',
+  reason: 'signal',
+  signal: 'SIGKILL',
+  unexpectedDuringPrompt: true
+};
+```
+
+**Recovery**: New agent spawned, session/load attempted
+
+### Scenario 2: Agent Segfault
+
+**Cause**: Agent binary crashes with segmentation fault
+
+**Detection**:
+```typescript
+record.lastExit = {
+  timestamp: '2026-03-14T01:35:00.000Z',
+  reason: 'signal',
+  signal: 'SIGSEGV',
+  exitCode: undefined,
+  unexpectedDuringPrompt: true
+};
+```
+
+**Recovery**: New agent spawned, session/load attempted
+
+### Scenario 3: Adapter Throws Uncaught Exception
+
+**Cause**: ACP adapter exits with non-zero code
+
+**Detection**:
+```typescript
+record.lastExit = {
+  timestamp: '2026-03-14T01:35:00.000Z',
+  reason: 'normal',
+  exitCode: 1,
+  unexpectedDuringPrompt: true
+};
+```
+
+**Recovery**: New agent spawned, session/load attempted
+
+### Scenario 4: Machine Reboot
+
+**Cause**: System restarted, all processes terminated
+
+**Detection**: Stored PID no longer exists
+
+**Recovery**: Same as other crash scenarios—respawn and load
+
+### Scenario 5: Load Fails (Resource Not Found)
+
+**Cause**: Adapter lost session state (ephemeral storage, etc.)
+
+**Detection**: `session/load` returns ACP error `-32002` (ResourceNotFound)
+
+**Recovery**: Fall back to `session/new`, continue with fresh conversation
+
+### Scenario 6: Graceful Agent Exit
+
+**Cause**: Agent intentionally closed connection (e.g., after `sessions close`)
+
+**Detection**:
+```typescript
+record.lastExit = {
+  timestamp: '2026-03-14T01:35:00.000Z',
+  reason: 'normal',
+  exitCode: 0,
+  unexpectedDuringPrompt: false
+};
+```
+
+**Recovery**: Not a crash—next prompt spawns normally
+
+## Edge Cases
+
+### PID Recycling
+
+On long-running systems, PIDs may be recycled:
+
+1. acpx stores PID `12345` for agent A
+2. Agent A crashes
+3. OS assigns PID `12345` to unrelated process B
+4. acpx checks `/proc/12345/cmdline` on Linux
+5. Command doesn't match expected agent → treat as dead
+
+<Note>
+On Windows and macOS, acpx relies on PID liveness only (no cmdline validation).
+</Note>
+
+### Concurrent Crash During Queue
+
+If the agent crashes while a queue owner is active:
+
+1. **Owner detects disconnect**: `lastExit.unexpectedDuringPrompt = true`
+2. **Error propagates to queued task**
+3. **Owner records lifecycle snapshot**
+4. **Next prompt detects dead PID** and respawns
+
+### Crash During session/load
+
+If the agent crashes while loading:
+
+```typescript
+try {
+  await client.loadSession(sessionId, cwd);
+} catch (error) {
+  // Check if agent died during load
+  if (client.getAgentLifecycleSnapshot().lastExit?.unexpectedDuringPrompt) {
+    // Agent crashed—throw error, don't fall back
+    throw error;
+  }
+  
+  // Otherwise fall back to session/new
+  const created = await client.createSession(cwd);
+}
+```
+
+### Empty Session Fallback
+
+Sessions with no agent messages are more permissive:
+
+```typescript
+if (!sessionHasAgentMessages(record)) {
+  // Allow fallback on internal errors
+  if (acp?.code === -32603) {
+    return true;
+  }
+}
+```
+
+This handles adapters that reject `session/load` for empty sessions.
+
+## Verbose Logging
+
+Enable crash recovery visibility:
+
+```bash
+acpx --verbose codex 'prompt after crash'
+```
+
+Logs:
+```
+[acpx] saved session pid 12345 is dead; respawning agent and attempting session/load
+[acpx] replayed desired mode auto on fresh ACP session 019c... (previous 019b...)
+[acpx] agent disconnected during prompt (signal, exit=, signal=SIGKILL)
+```
+
+## Implementation References
+
+- Crash detection: `src/session-runtime/connect-load.ts:64`
+- PID liveness: `src/queue-lease-store.ts:154`
+- Process validation: `src/session-runtime.ts:1231`
+- Lifecycle tracking: `src/session-runtime/lifecycle.ts`
+- Load fallback logic: `src/session-runtime/connect-load.ts:39`

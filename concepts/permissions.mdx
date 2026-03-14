@@ -1,0 +1,361 @@
+---
+title: Permissions
+description: Understanding permission modes and non-interactive policies in acpx
+---
+
+## Permission System
+
+`acpx` implements a permission system that controls what operations agents can perform. This prevents agents from making destructive changes without approval.
+
+<Info>
+Permissions are handled at the ACP client level, intercepting `client/request_permission` requests before they reach the agent's tool implementations.
+</Info>
+
+## Permission Modes
+
+You must choose exactly one permission mode:
+
+### `--approve-reads` (Default)
+
+Auto-approves read and search operations, prompts for everything else:
+
+```bash
+acpx codex "inspect repo structure and suggest plan"
+```
+
+**Auto-approved**:
+- File reads (`read`, `cat`)
+- Code searches (`search`, `find`, `grep`)
+
+**Requires approval**:
+- File edits (`write`, `edit`, `patch`)
+- File deletion (`delete`, `remove`)
+- Command execution (`run`, `execute`, `bash`)
+- Network requests (`fetch`, `http`)
+- File operations (`move`, `rename`)
+
+<Note>
+This is the safest default for exploratory work. The agent can gather information freely but needs approval for changes.
+</Note>
+
+### `--approve-all`
+
+Auto-approves all permission requests:
+
+```bash
+acpx --approve-all codex "apply the patch and run tests"
+```
+
+**Use cases**:
+- Trusted automation scripts
+- CI/CD pipelines
+- Batch operations where you've reviewed the work
+- Agents with well-understood behavior
+
+<Warning>
+Use `--approve-all` only when you trust the agent and understand what it will do. The agent can modify files, run commands, and make network requests without prompting.
+</Warning>
+
+### `--deny-all`
+
+Denies all permission requests:
+
+```bash
+acpx --deny-all codex "explain what you can do without tool access"
+```
+
+**Use cases**:
+- Testing agent reasoning without side effects
+- Explaining code without running tools
+- Dry-run validation
+- Debugging agent behavior
+
+<Info>
+In `--deny-all` mode, the agent receives permission denials but can still respond. This is useful for getting explanations or plans without executing them.
+</Info>
+
+## Permission Mode Examples
+
+From the CLI documentation:
+
+```bash
+# Auto-approve all permissions (use with caution)
+acpx --approve-all codex "apply this patch and run tests"
+
+# Auto-approve reads, prompt for writes (default)
+acpx --approve-reads codex "inspect the repo and propose a plan"
+
+# Deny all permissions
+acpx --deny-all codex "explain what you would do without running tools"
+```
+
+## Tool Kind Inference
+
+The permission system infers tool kinds from ACP tool call metadata:
+
+```typescript
+function inferToolKind(params: RequestPermissionRequest): ToolKind | undefined {
+  // First check explicit kind from ACP
+  if (params.toolCall.kind) {
+    return params.toolCall.kind;
+  }
+
+  // Fall back to title-based inference
+  const title = params.toolCall.title?.trim().toLowerCase();
+  const head = title.split(":", 1)[0]?.trim();
+
+  if (head.includes("read") || head.includes("cat")) return "read";
+  if (head.includes("search") || head.includes("grep")) return "search";
+  if (head.includes("write") || head.includes("edit")) return "edit";
+  if (head.includes("delete")) return "delete";
+  if (head.includes("run") || head.includes("bash")) return "execute";
+  // ... more inference rules
+}
+```
+
+Recognized tool kinds:
+- `read` - File reading operations
+- `search` - Code and file search
+- `edit` - File modifications
+- `delete` - File deletion
+- `move` - File/directory moves
+- `execute` - Command execution
+- `fetch` - Network requests
+- `think` - Reasoning (always auto-approved)
+- `other` - Unknown operations
+
+## Interactive Permission Prompts
+
+In `--approve-reads` mode, non-read operations trigger interactive prompts:
+
+```bash
+[permission] Allow Edit src/auth.ts [edit]? (y/N)
+```
+
+Behavior:
+- Prompts appear on stderr
+- Requires TTY (both stdin and stderr must be terminals)
+- `y` or `Y` approves the operation
+- `n`, `N`, or empty input denies
+- `Ctrl+C` cancels the operation
+
+<Note>
+Permission prompts show the tool name and inferred kind in brackets, e.g., `[edit]`, `[execute]`, `[delete]`.
+</Note>
+
+## Non-Interactive Permissions
+
+When running in a non-TTY environment (e.g., CI, cron, piped input), interactive prompts are unavailable. The `--non-interactive-permissions` flag controls behavior:
+
+### `--non-interactive-permissions deny` (Default)
+
+Automatically denies operations that would require a prompt:
+
+```bash
+# In CI pipeline
+acpx codex "review and fix issues" < /dev/null
+# Auto-approves reads, auto-denies writes (no prompt shown)
+```
+
+**Use cases**:
+- CI/CD pipelines with read-only analysis
+- Cron jobs that gather information
+- Scripts with piped input
+
+### `--non-interactive-permissions fail`
+
+Fails immediately when a prompt would be needed:
+
+```bash
+acpx --non-interactive-permissions fail codex "fix the tests" < /dev/null
+# Error: PERMISSION_PROMPT_UNAVAILABLE
+```
+
+**Use cases**:
+- Fail-fast validation in CI
+- Ensuring operations are fully automated
+- Detecting unexpected permission requests
+
+<Warning>
+When using `--non-interactive-permissions fail`, any operation requiring a prompt will error with `PERMISSION_PROMPT_UNAVAILABLE`.
+</Warning>
+
+## Non-Interactive Examples
+
+From the CLI documentation:
+
+```bash
+# Deny non-read operations when no TTY (default)
+acpx --approve-reads codex "analyze codebase" < /dev/null
+
+# Fail if permission prompt would be needed
+acpx --non-interactive-permissions fail codex "fix issues" < /dev/null
+```
+
+## Permission Response Flow
+
+The permission resolution logic from `permissions.ts`:
+
+```typescript
+export async function resolvePermissionRequest(
+  params: RequestPermissionRequest,
+  mode: PermissionMode,
+  nonInteractivePolicy: NonInteractivePermissionPolicy = "deny",
+): Promise<RequestPermissionResponse> {
+  // Get available options from agent
+  const options = params.options ?? [];
+  if (options.length === 0) {
+    return cancelled();
+  }
+
+  const allowOption = pickOption(options, ["allow_once", "allow_always"]);
+  const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
+
+  // Handle permission modes
+  if (mode === "approve-all") {
+    return allowOption ? selected(allowOption.optionId) : selected(options[0].optionId);
+  }
+
+  if (mode === "deny-all") {
+    return rejectOption ? selected(rejectOption.optionId) : cancelled();
+  }
+
+  // approve-reads mode: check tool kind
+  const kind = inferToolKind(params);
+  if (isAutoApprovedReadKind(kind) && allowOption) {
+    return selected(allowOption.optionId);
+  }
+
+  // Need to prompt - check if TTY available
+  if (!canPromptForPermission()) {
+    if (nonInteractivePolicy === "fail") {
+      throw new PermissionPromptUnavailableError();
+    }
+    return rejectOption ? selected(rejectOption.optionId) : cancelled();
+  }
+
+  // Show interactive prompt
+  const approved = await promptForToolPermission(params);
+  return approved && allowOption
+    ? selected(allowOption.optionId)
+    : rejectOption ? selected(rejectOption.optionId) : cancelled();
+}
+```
+
+## Permission Statistics
+
+The ACP client tracks permission statistics:
+
+```typescript
+type PermissionStats = {
+  approved: number;
+  denied: number;
+  cancelled: number;
+};
+
+const stats = client.getPermissionStats();
+console.log(`Approved: ${stats.approved}, Denied: ${stats.denied}`);
+```
+
+These stats are included in prompt results and can be used to detect permission issues.
+
+## Practical Scenarios
+
+### PR Review (Read-Only)
+
+```bash
+acpx --approve-reads codex \
+  "Review PR #842 for regressions and propose a minimal fix"
+
+# Agent can:
+# ✓ Read source files
+# ✓ Search codebase
+# ✓ Analyze git history
+
+# Agent cannot (without prompting):
+# ✗ Modify files
+# ✗ Run tests
+# ✗ Make commits
+```
+
+### Automated Testing (Full Access)
+
+```bash
+acpx --approve-all codex \
+  "Apply the patch, run tests, and commit if passing"
+
+# Agent can:
+# ✓ Read files
+# ✓ Modify files
+# ✓ Run commands
+# ✓ Make commits
+# No prompts - fully automated
+```
+
+### Dry Run (No Tools)
+
+```bash
+acpx --deny-all codex \
+  "Explain the steps to fix the flaky test"
+
+# Agent can:
+# ✓ Respond with explanations
+# ✓ Provide reasoning
+
+# Agent cannot:
+# ✗ Read files
+# ✗ Run searches
+# ✗ Execute any tools
+```
+
+### CI Pipeline (Fail Fast)
+
+```bash
+# Ensure no unexpected permission requests
+acpx --approve-reads --non-interactive-permissions fail \
+  codex exec "analyze test coverage" < /dev/null
+
+# Success: Only read operations performed
+# Failure: Agent tried to modify files or run commands
+```
+
+## Configuration
+
+Permission modes can be set in configuration files:
+
+```json
+{
+  "defaultPermissions": "approve-all",
+  "nonInteractivePermissions": "deny"
+}
+```
+
+CLI flags always override config values:
+
+```bash
+# Config says approve-all, flag overrides to approve-reads
+acpx --approve-reads codex "analyze repo"
+```
+
+## Exit Codes
+
+Permission-related exit codes:
+
+| Code | Meaning |
+| ---- | ------- |
+| `5`  | Permission denied (at least one permission was denied/cancelled) |
+
+<Info>
+Exit code 5 indicates that permission denial was the reason for failure. Use this in scripts to detect permission issues.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agent Client Protocol" icon="link" href="/concepts/agent-client-protocol">
+    Learn about the structured ACP protocol
+  </Card>
+  <Card title="Sessions" icon="database" href="/concepts/sessions">
+    Understand session persistence and scoping
+  </Card>
+</CardGroup>

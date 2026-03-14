@@ -1,0 +1,271 @@
+---
+title: CLI Commands Overview
+description: Complete command reference for acpx CLI
+---
+
+## Command Structure
+
+`acpx` provides a consistent command interface for managing ACP agent sessions and interactions.
+
+### Full Command Grammar
+
+Global options apply to all commands:
+
+```bash
+acpx [global_options] [prompt_text...]
+acpx [global_options] prompt [prompt_options] [prompt_text...]
+acpx [global_options] exec [prompt_options] [prompt_text...]
+acpx [global_options] cancel [-s <name>]
+acpx [global_options] set-mode <mode> [-s <name>]
+acpx [global_options] set <key> <value> [-s <name>]
+acpx [global_options] status [-s <name>]
+acpx [global_options] sessions [subcommand]
+acpx [global_options] config [subcommand]
+
+acpx [global_options] <agent> [prompt_options] [prompt_text...]
+acpx [global_options] <agent> prompt [prompt_options] [prompt_text...]
+acpx [global_options] <agent> exec [prompt_options] [prompt_text...]
+acpx [global_options] <agent> cancel [-s <name>]
+acpx [global_options] <agent> set-mode <mode> [-s <name>]
+acpx [global_options] <agent> set <key> <value> [-s <name>]
+acpx [global_options] <agent> status [-s <name>]
+acpx [global_options] <agent> sessions [subcommand]
+```
+
+## Agent Selection
+
+`<agent>` can be:
+
+- **Built-in agent name**: `pi`, `openclaw`, `codex`, `claude`, etc.
+- **Unknown token**: Treated as a raw command
+- **Explicit override**: Use `--agent <command>` flag to specify any ACP server
+
+### Default Agent
+
+When no agent is specified, commands default to `codex`.
+
+```bash
+acpx "fix the tests"           # Uses codex
+acpx exec "summarize repo"    # Uses codex
+acpx sessions new              # Uses codex
+```
+
+### Agent-Specific Commands
+
+```bash
+acpx pi "review changes"
+acpx openclaw "analyze code"
+acpx codex "fix bugs"
+acpx claude "refactor auth"
+```
+
+### Custom Agent Command
+
+```bash
+acpx --agent ./my-custom-acp-server "do something"
+acpx --agent 'node ./scripts/acp-dev-server.mjs --mode ci' exec "summarize"
+```
+
+<Warning>
+Do not combine positional agent and `--agent` flag in the same command.
+</Warning>
+
+## Core Commands
+
+### Session Management
+
+| Command | Description |
+|---------|-------------|
+| [`prompt`](/cli/prompt) | Send prompt to persistent session |
+| [`exec`](/cli/exec) | One-shot prompt without saved session |
+| [`sessions`](/cli/sessions) | Manage sessions (list, new, close, etc.) |
+| [`cancel`](/cli/cancel) | Cancel running prompt |
+| [`status`](/cli/status) | Show session process status |
+
+### Configuration
+
+| Command | Description |
+|---------|-------------|
+| [`set-mode`](/cli/set-mode) | Set session mode |
+| [`set`](/cli/config#set-command) | Set session config option |
+| [`config`](/cli/config) | Manage configuration files |
+
+## Global Options
+
+All commands support these global options:
+
+<ParamField path="--agent" type="string">
+  Raw ACP agent command (escape hatch). Do not combine with positional agent.
+</ParamField>
+
+<ParamField path="--cwd" type="string">
+  Working directory. Defaults to current directory. Stored as absolute path for scoping.
+</ParamField>
+
+<ParamField path="--approve-all" type="boolean">
+  Auto-approve all permissions (permission mode `approve-all`).
+</ParamField>
+
+<ParamField path="--approve-reads" type="boolean">
+  Auto-approve reads/searches, prompt for others (default permission mode).
+</ParamField>
+
+<ParamField path="--deny-all" type="boolean">
+  Deny all permissions (permission mode `deny-all`).
+</ParamField>
+
+<ParamField path="--format" type="string" default="text">
+  Output format: `text`, `json`, or `quiet`.
+</ParamField>
+
+<ParamField path="--json-strict" type="boolean">
+  Strict JSON mode. Requires `--format json`; suppresses non-JSON stderr output.
+</ParamField>
+
+<ParamField path="--non-interactive-permissions" type="string" default="deny">
+  Non-TTY prompt policy: `deny` (default) or `fail` when approval prompt cannot be shown.
+</ParamField>
+
+<ParamField path="--timeout" type="number">
+  Max wait time for agent response in seconds. Must be positive. Decimal values allowed.
+</ParamField>
+
+<ParamField path="--ttl" type="number" default="300">
+  Queue owner idle TTL in seconds before shutdown. `0` disables TTL.
+</ParamField>
+
+<ParamField path="--verbose" type="boolean">
+  Enable verbose logs. Prints ACP/debug details to stderr.
+</ParamField>
+
+<Note>
+Permission flags (`--approve-all`, `--approve-reads`, `--deny-all`) are mutually exclusive.
+</Note>
+
+## Prompt Options
+
+Commands that accept prompts (`prompt`, `exec`, and implicit prompt) support:
+
+<ParamField path="-s, --session" type="string">
+  Use named session instead of cwd default.
+</ParamField>
+
+<ParamField path="--no-wait" type="boolean">
+  Queue prompt and return immediately if session is busy.
+</ParamField>
+
+<ParamField path="-f, --file" type="string">
+  Read prompt text from file. Use `-` for stdin.
+</ParamField>
+
+## Prompt Input Methods
+
+### Command-Line Arguments
+
+```bash
+acpx codex "fix the failing tests"
+```
+
+### From File
+
+```bash
+acpx codex --file prompt.md
+acpx codex --file /path/to/instructions.txt
+```
+
+### From Stdin
+
+```bash
+echo "fix the tests" | acpx codex
+cat instructions.txt | acpx codex
+acpx codex --file -  # Explicit stdin
+```
+
+### Combined
+
+```bash
+acpx codex --file - "also check lint warnings"
+```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|----------|
+| `0` | Success |
+| `1` | Agent/protocol/runtime error |
+| `2` | CLI usage error |
+| `3` | Timeout |
+| `4` | No session found (requires `sessions new`) |
+| `5` | Permission denied |
+| `130` | Interrupted (SIGINT/SIGTERM) |
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Create session and send prompt
+acpx codex sessions new
+acpx codex "fix the failing tests"
+
+# One-shot without session
+acpx codex exec "summarize this repo"
+
+# Use different agent
+acpx claude "refactor auth middleware"
+```
+
+### Named Sessions
+
+```bash
+# Parallel workstreams
+acpx codex sessions new --name backend
+acpx codex sessions new --name frontend
+
+acpx codex -s backend "fix API timeout"
+acpx codex -s frontend "update UI components"
+```
+
+### Permission Control
+
+```bash
+acpx --approve-all codex "apply patch and run tests"
+acpx --approve-reads codex "inspect repo structure"
+acpx --deny-all codex "explain without tools"
+```
+
+### Output Formats
+
+```bash
+# Human-readable
+acpx codex "review PR"
+
+# JSON for automation
+acpx --format json codex exec "review PR" | jq .
+
+# Quiet mode (final text only)
+acpx --format quiet codex "summarize findings"
+```
+
+### Advanced Options
+
+```bash
+# Custom working directory
+acpx --cwd ~/repos/api codex "review auth changes"
+
+# Timeout control
+acpx --timeout 120 codex "investigate test failures"
+
+# Queue owner TTL
+acpx --ttl 30 codex "quick follow-up"
+
+# Verbose debugging
+acpx --verbose codex "debug startup issues"
+```
+
+## See Also
+
+- [prompt command](/cli/prompt) - Persistent session prompts
+- [exec command](/cli/exec) - One-shot prompts
+- [sessions command](/cli/sessions) - Session management
+- [config command](/cli/config) - Configuration management

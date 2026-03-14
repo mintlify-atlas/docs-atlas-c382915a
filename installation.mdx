@@ -1,0 +1,252 @@
+---
+title: Installation
+description: Install acpx and set up your first ACP-compatible coding agent
+---
+
+# Installation
+
+Get acpx installed and configure your first agent. This guide covers prerequisites, installation methods, and agent setup.
+
+## Prerequisites
+
+<Note>
+  **Node.js requirement**: acpx requires Node.js >= 22.12.0
+</Note>
+
+Check your Node.js version:
+
+```bash
+node --version
+```
+
+If you need to upgrade, visit [nodejs.org](https://nodejs.org) or use a version manager like [nvm](https://github.com/nvm-sh/nvm).
+
+## Installation Methods
+
+<Steps>
+  <Step title="Choose your installation method">
+    You can install acpx globally or use it with `npx` (no installation required).
+
+    ### Global Installation (Recommended)
+
+    Install acpx globally for faster startup:
+
+    ```bash
+    npm install -g acpx@latest
+    ```
+
+    Verify the installation:
+
+    ```bash
+    acpx --version
+    ```
+
+    ### Using npx (No Installation)
+
+    Run acpx without installing:
+
+    ```bash
+    npx acpx@latest --help
+    ```
+
+    <Note>
+      Session state lives in `~/.acpx/` either way. Global install is a little faster, but `npx acpx@latest` works fine.
+    </Note>
+  </Step>
+
+  <Step title="Install an ACP-compatible agent">
+    acpx is a client that talks to ACP-compatible coding agents. You need at least one agent installed.
+
+    <Warning>
+      acpx auto-downloads ACP adapters with `npx` on first use. You do **not** need to install adapter packages manually.
+    </Warning>
+
+    Choose one agent to start with:
+
+    <Tabs>
+      <Tab title="Codex (Default)">
+        Install the Codex CLI from OpenAI:
+
+        ```bash
+        # Follow installation instructions at:
+        # https://codex.openai.com
+        ```
+
+        Codex is the default agent for acpx commands.
+      </Tab>
+
+      <Tab title="Pi">
+        Install the Pi Coding Agent:
+
+        ```bash
+        # Follow installation instructions at:
+        # https://github.com/mariozechner/pi
+        ```
+      </Tab>
+
+      <Tab title="OpenClaw">
+        Install the OpenClaw ACP bridge:
+
+        ```bash
+        # Follow installation instructions at:
+        # https://github.com/openclaw/openclaw
+        ```
+      </Tab>
+
+      <Tab title="Claude">
+        Install Claude Code from Anthropic:
+
+        ```bash
+        # Follow installation instructions at:
+        # https://claude.ai/code
+        ```
+      </Tab>
+    </Tabs>
+
+    <Note>
+      You can install multiple agents and switch between them using the agent name in your commands.
+    </Note>
+  </Step>
+
+  <Step title="Verify your installation">
+    Test that acpx can communicate with your agent:
+
+    ```bash
+    # For Codex (default agent)
+    acpx codex exec "what is the current directory?"
+
+    # For other agents, replace 'codex' with the agent name:
+    acpx pi exec "what is the current directory?"
+    acpx openclaw exec "what is the current directory?"
+    acpx claude exec "what is the current directory?"
+    ```
+
+    <Note>
+      The `exec` command runs a one-shot prompt without creating a persistent session - perfect for testing.
+    </Note>
+  </Step>
+</Steps>
+
+## Agent Prerequisites
+
+The only prerequisite is the underlying coding agent you want to use. Here's the complete list:
+
+| Agent | Install From |
+|-------|-------------|
+| `pi` | [Pi Coding Agent](https://github.com/mariozechner/pi) |
+| `openclaw` | [OpenClaw ACP bridge](https://github.com/openclaw/openclaw) |
+| `codex` | [Codex CLI](https://codex.openai.com) |
+| `claude` | [Claude Code](https://claude.ai/code) |
+| `gemini` | [Gemini CLI](https://github.com/google/gemini-cli) |
+| `cursor` | [Cursor CLI](https://cursor.com/docs/cli/acp) |
+| `copilot` | [GitHub Copilot CLI](https://docs.github.com/copilot) |
+| `droid` | [Factory Droid](https://www.factory.ai) |
+| `iflow` | [iFlow CLI](https://github.com/iflow-ai/iflow-cli) |
+| `kilocode` | [Kilocode](https://kilocode.ai) |
+| `kimi` | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) |
+| `kiro` | [Kiro CLI](https://kiro.dev) |
+| `opencode` | [OpenCode](https://opencode.ai) |
+| `qwen` | [Qwen Code](https://github.com/QwenLM/qwen-code) |
+
+## Configuration (Optional)
+
+Create a configuration file to customize acpx behavior:
+
+<Steps>
+  <Step title="Initialize config file">
+    ```bash
+    acpx config init
+    ```
+
+    This creates `~/.acpx/config.json` with default settings.
+  </Step>
+
+  <Step title="Customize settings">
+    Edit `~/.acpx/config.json` to set your preferences:
+
+    ```json
+    {
+      "defaultAgent": "codex",
+      "defaultPermissions": "approve-reads",
+      "ttl": 300,
+      "format": "text"
+    }
+    ```
+
+    Common settings:
+    - `defaultAgent`: Default agent when no agent is specified
+    - `defaultPermissions`: `approve-all`, `approve-reads`, or `deny-all`
+    - `ttl`: Queue owner idle timeout in seconds (default: 300)
+    - `format`: Output format - `text`, `json`, or `quiet`
+  </Step>
+
+  <Step title="View resolved config">
+    ```bash
+    acpx config show
+    ```
+
+    This shows the merged configuration from:
+    1. Global config: `~/.acpx/config.json`
+    2. Project config: `<cwd>/.acpxrc.json` (if exists)
+    3. CLI flags (highest priority)
+  </Step>
+</Steps>
+
+## Project-Level Configuration
+
+Create a project-specific config file for team-wide settings:
+
+```bash
+# In your project directory
+touch .acpxrc.json
+```
+
+Example project config:
+
+```json .acpxrc.json
+{
+  "defaultAgent": "codex",
+  "defaultPermissions": "approve-reads",
+  "agents": {
+    "my-custom": {
+      "command": "./bin/my-acp-server"
+    }
+  }
+}
+```
+
+<Warning>
+  Project configs override global configs. CLI flags always win.
+</Warning>
+
+## Custom Agent Commands
+
+Use the `--agent` flag for custom ACP servers:
+
+```bash
+acpx --agent ./my-custom-acp-server "do something"
+```
+
+Or configure custom agents in your config file:
+
+```json
+{
+  "agents": {
+    "my-agent": {
+      "command": "./bin/my-acp-server --debug"
+    }
+  }
+}
+```
+
+Then use it like a built-in agent:
+
+```bash
+acpx my-agent "review this code"
+```
+
+## Next Steps
+
+<Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+  Learn the essential acpx workflows and create your first session
+</Card>

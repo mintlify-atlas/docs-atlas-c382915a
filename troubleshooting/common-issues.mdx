@@ -1,0 +1,614 @@
+---
+title: "Common Issues"
+description: "Solutions to frequently encountered problems with acpx"
+---
+
+## Session Errors
+
+<AccordionGroup>
+  <Accordion title='"No session found" error when running prompts'>
+    **Problem:** You receive an exit code 4 with a message like:
+    ```
+    No session found for scope (codex, /path/to/repo)
+    Run 'acpx codex sessions new' to create one
+    ```
+
+    **Root Cause:** Prompt commands require an existing session record. Unlike one-shot `exec` commands, persistent prompts need explicit session creation.
+
+    **Solution:**
+
+    <Steps>
+      <Step title="Create a session explicitly">
+        ```bash
+        acpx codex sessions new
+        ```
+      </Step>
+      <Step title="Or use ensure for idempotent creation">
+        ```bash
+        acpx codex sessions ensure
+        ```
+        This returns an existing session or creates one if missing.
+      </Step>
+      <Step title="Then run your prompt">
+        ```bash
+        acpx codex "fix the failing test"
+        ```
+      </Step>
+    </Steps>
+
+    **Prevention:** Use `sessions ensure` in automation scripts to guarantee a session exists before prompting.
+  </Accordion>
+
+  <Accordion title="Session routing picks the wrong directory">
+    **Problem:** Your prompt connects to a session in a parent directory instead of the current working directory.
+
+    **Root Cause:** acpx routes sessions by walking up from `cwd` to the nearest git root. It selects the first matching session for `(agent command, directory, optional name)`.
+
+    **How Session Routing Works:**
+    1. Detects the nearest `.git` directory by walking up from `cwd`
+    2. Walks from `cwd` up to git root (inclusive)
+    3. Matches first active (non-closed) session for that scope
+    4. If no git root exists, only checks exact `cwd`
+
+    **Solution:**
+
+    <CodeGroup>
+      ```bash Use a named session for isolation
+      # In subdirectory, create a named session
+      cd ~/repo/backend
+      acpx codex sessions new --name backend
+      acpx codex -s backend "implement the feature"
+      ```
+
+      ```bash Override working directory
+      # Force exact directory match
+      acpx --cwd ~/repo/backend codex "work here"
+      ```
+
+      ```bash Close parent sessions
+      # Close the parent session to prevent matching
+      cd ~/repo
+      acpx codex sessions close
+      ```
+    </CodeGroup>
+
+    <Note>
+      Named sessions (`-s <name>`) are scoped to `(agent, directory, name)`, allowing parallel workstreams in the same repo.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Session marked as closed, won't resume">
+    **Problem:** Running a prompt fails because the session is closed, even though it appears in `sessions list`.
+
+    **Solution:**
+
+    Create a fresh session in that scope:
+    ```bash
+    acpx codex sessions new
+    # or for named sessions:
+    acpx codex sessions new --name api
+    ```
+
+    **Why This Happens:** `sessions close` marks the session `closed: true` and terminates processes, but keeps the record on disk with full history. Auto-resume skips closed sessions. Creating a new session soft-closes the previous one.
+
+    **Viewing Closed Sessions:**
+    ```bash
+    # Text format shows [closed] marker
+    acpx codex sessions list
+
+    # JSON format includes closed flag
+    acpx --format json codex sessions list
+    ```
+  </Accordion>
+
+  <Accordion title='"Resource not found" or "Session not found" from adapter'>
+    **Problem:** The agent adapter returns an ACP error:
+    ```json
+    {
+      "code": -32002,
+      "message": "Resource not found: session abc123"
+    }
+    ```
+
+    **Root Cause:** The saved `acpSessionId` is no longer valid on the adapter side. This can happen after:
+    - Adapter process crashes
+    - Provider-side session expiration
+    - Manual session deletion in the provider UI
+
+    **Solution:**
+
+    acpx handles this automatically via crash recovery:
+    1. Detects dead process or invalid session
+    2. Respawns the agent
+    3. Attempts `session/load` with saved state
+    4. Falls back to `session/new` if loading fails
+
+    If recovery fails, create a fresh session:
+    ```bash
+    acpx codex sessions new
+    ```
+
+    <Warning>
+      Fallback to `session/new` loses server-side history but preserves local turn previews in the session record.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+## Permission Issues
+
+<AccordionGroup>
+  <Accordion title="Permission denied errors (exit code 5)">
+    **Problem:** The prompt completes with `PERMISSION_DENIED` exit code 5.
+
+    **Root Cause:** At least one permission was requested and denied, and no permissions were approved.
+
+    **Permission Modes:**
+
+    | Mode | Behavior |
+    | --- | --- |
+    | `--approve-reads` | Auto-approve reads/searches, prompt for others (default) |
+    | `--approve-all` | Auto-approve all permissions |
+    | `--deny-all` | Deny all permissions |
+
+    **Solutions:**
+
+    <CodeGroup>
+      ```bash Auto-approve everything
+      acpx --approve-all codex "apply the patch and run tests"
+      ```
+
+      ```bash Set via config file
+      # ~/.acpx/config.json
+      {
+        "defaultPermissions": "approve-all"
+      }
+      ```
+
+      ```bash Project-specific permissions
+      # .acpxrc.json in repo root
+      {
+        "defaultPermissions": "approve-all"
+      }
+      ```
+    </CodeGroup>
+
+    <Note>
+      CLI flags always override config file values.
+    </Note>
+  </Accordion>
+
+  <Accordion title='"Permission prompt unavailable in non-interactive mode"'>
+    **Problem:** In CI or scripts, acpx fails when trying to show permission prompts.
+
+    **Root Cause:** No TTY available, and `--approve-reads` mode tries to prompt for non-read operations.
+
+    **Non-Interactive Policies:**
+    - `--non-interactive-permissions deny` (default): deny prompts when no TTY
+    - `--non-interactive-permissions fail`: fail fast with error code
+
+    **Solutions:**
+
+    <CodeGroup>
+      ```bash Use approve-all in CI
+      acpx --approve-all codex "run the build"
+      ```
+
+      ```bash Fail fast for debugging
+      acpx --approve-reads --non-interactive-permissions fail codex "task"
+      ```
+
+      ```bash Deny all in restricted environments
+      acpx --deny-all codex "explain without tool access"
+      ```
+    </CodeGroup>
+  </Accordion>
+
+  <Accordion title="File permission errors (EACCES, EPERM)">
+    **Problem:** The agent adapter fails to read/write session state in `~/.acpx/sessions/`.
+
+    **Common Causes:**
+    - Directory doesn't exist
+    - Incorrect ownership after `sudo` usage
+    - SELinux or AppArmor restrictions
+
+    **Solution:**
+
+    <Steps>
+      <Step title="Check directory permissions">
+        ```bash
+        ls -la ~/.acpx/
+        ```
+      </Step>
+      <Step title="Fix ownership if needed">
+        ```bash
+        # If owned by root after sudo usage
+        sudo chown -R $USER:$USER ~/.acpx/
+        ```
+      </Step>
+      <Step title="Verify write access">
+        ```bash
+        touch ~/.acpx/test && rm ~/.acpx/test
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+</AccordionGroup>
+
+## Agent Adapter Issues
+
+<AccordionGroup>
+  <Accordion title="Agent adapter not found or fails to start">
+    **Problem:** Running `acpx <agent>` fails with spawn errors.
+
+    **For Built-in Adapters:**
+
+    acpx auto-downloads adapters with `npx` on first use. Common issues:
+
+    <Steps>
+      <Step title="Check npm registry access">
+        ```bash
+        npm ping
+        ```
+      </Step>
+      <Step title="Verify adapter package exists">
+        ```bash
+        # For pi
+        npx pi-acp --version
+
+        # For codex
+        npx @zed-industries/codex-acp --version
+        ```
+      </Step>
+      <Step title="Clear npx cache if stale">
+        ```bash
+        rm -rf ~/.npm/_npx
+        ```
+      </Step>
+    </Steps>
+
+    **For Custom Agents:**
+
+    ```bash
+    # Test the command directly
+    ./my-custom-acp-server --version
+
+    # Use --agent escape hatch
+    acpx --agent './my-custom-acp-server' 'test prompt'
+
+    # Or add to config
+    # ~/.acpx/config.json
+    {
+      "agents": {
+        "mycustom": {
+          "command": "./my-custom-acp-server"
+        }
+      }
+    }
+    ```
+
+    <Warning>
+      If using a local OpenClaw checkout, override the built-in command in config to avoid `pnpm` wrapper issues. See [OpenClaw agent documentation](/agents/openclaw) for details.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Agent crashes repeatedly on startup">
+    **Problem:** The agent process spawns but exits immediately with non-zero code.
+
+    **Debugging Steps:**
+
+    <Steps>
+      <Step title="Run with verbose logging">
+        ```bash
+        acpx --verbose codex "test"
+        ```
+        This prints ACP protocol messages and adapter stderr.
+      </Step>
+      <Step title="Check adapter prerequisites">
+        Different agents have different requirements:
+        - `pi`: Requires [Pi Coding Agent](https://github.com/mariozechner/pi) installed
+        - `codex`: Requires authentication at [https://codex.openai.com](https://codex.openai.com)
+        - `claude`: Requires Claude Code access
+        - `openclaw`: Requires OpenClaw installation
+      </Step>
+      <Step title="Test adapter standalone">
+        ```bash
+        # Test pi adapter directly
+        npx pi-acp --help
+
+        # Test with stdio ACP session
+        echo '{"jsonrpc":"2.0","id":"req-1","method":"session/new","params":{"cwd":"/tmp"}}' | npx pi-acp
+        ```
+      </Step>
+    </Steps>
+
+    **Common Fixes:**
+    - Authentication expired: re-authenticate with the provider
+    - Missing environment variables: check adapter docs
+    - Incompatible Node version: acpx requires Node.js ≥22.12.0
+  </Accordion>
+
+  <Accordion title="Adapter hangs on startup (Gemini, Claude)">
+    **Problem:** Some adapters have known startup timeouts.
+
+    **Known Issues:**
+    - **Gemini ACP**: May timeout on `session/new` during initial connection
+    - **Claude ACP**: May timeout on `session/create` with slow networks
+
+    **Solutions:**
+
+    <CodeGroup>
+      ```bash Increase timeout
+      acpx --timeout 120 gemini "test prompt"
+      ```
+
+      ```bash Set via config
+      # ~/.acpx/config.json
+      {
+        "timeout": 120
+      }
+      ```
+    </CodeGroup>
+
+    <Note>
+      Default timeout is unset (no limit). The `--timeout` flag sets a maximum wait time in seconds.
+    </Note>
+
+    If timeouts persist:
+    1. Check network connectivity to the provider
+    2. Review adapter logs with `--verbose`
+    3. Report to the adapter maintainer (not acpx)
+  </Accordion>
+</AccordionGroup>
+
+## Queue and Process Issues
+
+<AccordionGroup>
+  <Accordion title="Queue owner conflicts">
+    **Problem:** Error messages about queue owner generation mismatch or overload.
+
+    **Root Cause:** Multiple acpx processes competing for queue ownership, or stale queue metadata.
+
+    **Solution:**
+
+    <Steps>
+      <Step title="Check session status">
+        ```bash
+        acpx codex status
+        ```
+        Shows running/dead/no-session state.
+      </Step>
+      <Step title="Wait for queue owner TTL">
+        Default TTL is 300 seconds. The queue owner shuts down after idle period.
+      </Step>
+      <Step title="Force close the session">
+        ```bash
+        acpx codex sessions close
+        ```
+        Terminates queue owner and marks session closed.
+      </Step>
+      <Step title="Create fresh session">
+        ```bash
+        acpx codex sessions new
+        ```
+      </Step>
+    </Steps>
+
+    **Prevention:** Use `--ttl 0` to keep queue owners alive indefinitely during active development:
+    ```bash
+    acpx --ttl 0 codex "first prompt"
+    acpx codex "follow-up prompt"  # reuses warm owner
+    ```
+  </Accordion>
+
+  <Accordion title="Stale PID in session metadata">
+    **Problem:** `status` shows a PID but the process is dead.
+
+    **Root Cause:** The agent process crashed or was killed externally (e.g., `kill -9`).
+
+    **Solution:**
+
+    acpx auto-recovers on next prompt:
+    1. Detects dead PID
+    2. Respawns agent
+    3. Attempts session/load
+    4. Falls back to session/new if needed
+
+    Manual recovery:
+    ```bash
+    # Verify process is truly dead
+    acpx codex status
+
+    # Next prompt auto-recovers
+    acpx codex "continue work"
+
+    # Or create fresh session
+    acpx codex sessions new
+    ```
+  </Accordion>
+
+  <Accordion title="Multiple prompts queue but don't execute">
+    **Problem:** Running `acpx codex "prompt"` multiple times queues them but nothing happens.
+
+    **Root Cause:** Queue owner process is stuck or leaked.
+
+    **Debugging:**
+
+    <Steps>
+      <Step title="Check status">
+        ```bash
+        acpx codex status
+        ```
+      </Step>
+      <Step title="Look for leaked processes">
+        ```bash
+        ps aux | grep acpx
+        ps aux | grep codex-acp  # or your adapter name
+        ```
+      </Step>
+      <Step title="Kill stuck processes">
+        ```bash
+        # Find PID from status command
+        kill <pid>
+        ```
+      </Step>
+      <Step title="Create fresh session">
+        ```bash
+        acpx codex sessions close
+        acpx codex sessions new
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title='"Queue owner shutting down" during prompt'>
+    **Problem:** Prompt fails mid-execution with queue shutdown error.
+
+    **Root Cause:** The queue owner hit its TTL while draining queued prompts.
+
+    **Solution:**
+
+    Use longer TTL during batch operations:
+    ```bash
+    acpx --ttl 600 codex "first prompt"
+    acpx codex "second prompt"
+    acpx codex "third prompt"
+    ```
+
+    Or disable TTL entirely:
+    ```bash
+    acpx --ttl 0 codex "prompt"
+    ```
+
+    <Warning>
+      `--ttl 0` keeps the queue owner alive indefinitely. Use `sessions close` or `cancel` to clean up.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+## Timeout Issues
+
+<AccordionGroup>
+  <Accordion title="Operation times out (exit code 3)">
+    **Problem:** acpx exits with code 3 and timeout error.
+
+    **Common Scenarios:**
+    - Slow agent startup (especially first run with cold cache)
+    - Large file operations
+    - Network delays to provider APIs
+    - Extended reasoning for complex prompts
+
+    **Solutions:**
+
+    <CodeGroup>
+      ```bash Increase timeout globally
+      acpx --timeout 180 codex "complex analysis task"
+      ```
+
+      ```bash Set in config
+      # ~/.acpx/config.json
+      {
+        "timeout": 300
+      }
+      ```
+
+      ```bash Disable timeout
+      # Omit --timeout flag (default: no limit)
+      acpx codex "long-running task"
+      ```
+    </CodeGroup>
+
+    <Note>
+      Timeout is specified in seconds. Decimal values are allowed (e.g., `--timeout 90.5`).
+    </Note>
+  </Accordion>
+
+  <Accordion title="Which operations does timeout cover?">
+    Timeout applies to:
+    - `client.start()` (adapter startup)
+    - `session/new` and `session/load` (session creation)
+    - `session/prompt` (full turn execution)
+    - `session/set_mode` and `session/set_config_option`
+
+    Timeout does NOT apply to:
+    - Queue IPC communication (has separate internal limits)
+    - Session lookup and file I/O
+    - `sessions list/show/history` (local operations)
+  </Accordion>
+</AccordionGroup>
+
+## Configuration Issues
+
+<AccordionGroup>
+  <Accordion title="Config file not being read">
+    **Problem:** Settings in config files are ignored.
+
+    **Config Resolution Order:**
+    1. Global: `~/.acpx/config.json`
+    2. Project: `<cwd>/.acpxrc.json` (merged on top)
+    3. CLI flags (always win)
+
+    **Debugging:**
+
+    <Steps>
+      <Step title="Verify config syntax">
+        ```bash
+        # Check for JSON errors
+        cat ~/.acpx/config.json | jq
+        cat .acpxrc.json | jq
+        ```
+      </Step>
+      <Step title="Show resolved config">
+        ```bash
+        acpx config show
+        ```
+        This displays the final merged config.
+      </Step>
+      <Step title="Check supported keys">
+        Only these keys are recognized:
+        - `defaultAgent`
+        - `defaultPermissions`
+        - `nonInteractivePermissions`
+        - `authPolicy`
+        - `ttl`
+        - `timeout`
+        - `format`
+        - `agents` (object)
+        - `auth` (object)
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title="Creating global config template">
+    **Problem:** Not sure what to put in config file.
+
+    **Solution:**
+
+    ```bash
+    acpx config init
+    ```
+
+    This creates `~/.acpx/config.json` with default template:
+
+    ```json
+    {
+      "defaultAgent": "codex",
+      "defaultPermissions": "approve-reads",
+      "nonInteractivePermissions": "deny",
+      "authPolicy": "skip",
+      "ttl": 300,
+      "timeout": null,
+      "format": "text",
+      "agents": {},
+      "auth": {}
+    }
+    ```
+
+    Edit values as needed. `null` means no limit (for `timeout`).
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [Debugging Guide](/troubleshooting/debugging) - Verbose logging, protocol inspection, and bug reporting
+- [CLI Reference](/cli/overview) - Complete command reference with all options
+- [Sessions](/concepts/sessions) - Session lifecycle and scoping rules

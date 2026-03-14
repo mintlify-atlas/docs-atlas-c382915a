@@ -1,0 +1,307 @@
+---
+title: Agent Skills
+description: How to install and use the acpx skill to teach agents about acpx workflows
+---
+
+## Overview
+
+The `acpx` skill is a structured reference document that teaches AI agents how to use acpx for agent-to-agent communication. Instead of scraping PTY sessions, agents can read the skill and use acpx's structured ACP interface.
+
+<Note>
+Skills are agent-facing documentation—they provide concise, actionable guidance for agents delegating work to other agents.
+</Note>
+
+## Installing the acpx Skill
+
+### Via `--skill` Flag
+
+```bash
+npx acpx@latest --skill install acpx
+```
+
+This installs the acpx skill to your local skills directory.
+
+<Warning>
+The `--skill` flag is referenced in the README but the actual implementation may vary. Check `acpx --help` for current skill installation syntax.
+</Warning>
+
+## Skills Directory Structure
+
+The acpx repository includes a `skills/` directory:
+
+```
+skills/
+└── acpx/
+    └── SKILL.md
+```
+
+### skills/acpx/SKILL.md
+
+This is the canonical skill reference for acpx. It contains:
+
+- **When to use**: Guidance on when agents should invoke acpx
+- **What acpx is**: Brief overview of capabilities
+- **Install instructions**: How to install globally or use with npx
+- **Command model**: Full syntax with global/prompt options
+- **Built-in agent registry**: Mapping of friendly names to commands
+- **Session behavior**: Scoping, persistence, queueing
+- **Output formats**: text, json, quiet modes
+- **Practical workflows**: Example patterns for common tasks
+
+## Using the acpx Skill
+
+### Teaching an Agent
+
+Copy this prompt into your orchestrator agent:
+
+```text
+I want you to use acpx to run coding agents over the Agent Client Protocol
+(ACP) instead of scraping PTY sessions. Please do the following:
+
+1. Install acpx globally (recommended) or use npx:
+   npm install -g acpx@latest
+
+   Or without installing:
+   npx acpx@latest
+
+2. Install the acpx skill so you have the full reference available:
+   npx acpx@latest --skill install acpx
+
+3. Read the acpx skill reference so you know every command, flag, and
+   workflow pattern:
+   https://raw.githubusercontent.com/openclaw/acpx/main/skills/acpx/SKILL.md
+
+4. If you need the full CLI reference with all options and examples:
+   https://raw.githubusercontent.com/openclaw/acpx/main/docs/CLI.md
+
+From now on, when you need to delegate work to a coding agent, use acpx
+instead of spawning raw terminal sessions. For example:
+  npx acpx@latest codex "fix the failing tests"
+  npx acpx@latest claude "refactor the auth module"
+  npx acpx@latest codex exec "one-shot: summarize this repo"
+```
+
+### What the Agent Learns
+
+After reading `skills/acpx/SKILL.md`, the agent knows:
+
+1. **Basic invocation**:
+   ```bash
+   acpx codex 'fix the tests'
+   acpx exec 'summarize this repo'
+   ```
+
+2. **Session management**:
+   ```bash
+   acpx codex sessions new
+   acpx codex -s backend 'implement pagination'
+   acpx codex sessions close backend
+   ```
+
+3. **Queueing and async**:
+   ```bash
+   acpx codex 'run full test suite'
+   acpx codex --no-wait 'summarize results when done'
+   ```
+
+4. **Automation**:
+   ```bash
+   acpx --format json codex exec 'review changes' | jq
+   ```
+
+5. **Permission modes**:
+   ```bash
+   acpx --approve-all codex 'apply patch and run tests'
+   ```
+
+## Skill Content Highlights
+
+From `skills/acpx/SKILL.md`:
+
+### Command Model
+
+```markdown
+acpx [global_options] [prompt_text...]
+acpx [global_options] prompt [prompt_options] [prompt_text...]
+acpx [global_options] exec [prompt_options] [prompt_text...]
+acpx [global_options] cancel [-s <name>]
+acpx [global_options] set-mode <mode> [-s <name>]
+acpx [global_options] sessions [list | new | close | show | history]
+```
+
+### Built-in Agents
+
+| Agent      | Command                                   |
+|------------|-------------------------------------------|
+| `pi`       | `npx pi-acp`                              |
+| `openclaw` | `openclaw acp`                            |
+| `codex`    | `npx @zed-industries/codex-acp`           |
+| `claude`   | `npx -y @zed-industries/claude-agent-acp` |
+
+And others: gemini, cursor, copilot, droid, kimi, opencode, kiro, kilocode, qwen.
+
+### Session Scoping
+
+```markdown
+Persistent prompt sessions are scoped by:
+- `agentCommand`
+- absolute `cwd`
+- optional session `name`
+
+Session records are stored in `~/.acpx/sessions/*.json`.
+```
+
+### Queueing
+
+```markdown
+Queueing is per persistent session.
+
+- The active `acpx` process for a running prompt becomes the queue owner.
+- Other invocations submit prompts over local IPC.
+- Default: enqueue and wait for completion.
+- `--no-wait`: enqueue and return after acknowledgement.
+```
+
+### Output Formats
+
+```markdown
+Use `--format <fmt>`:
+
+- `text` (default): human-readable stream
+- `json`: NDJSON event stream (good for automation)
+- `quiet`: final assistant text only
+```
+
+## Examples from README
+
+The README includes practical examples that complement the skill:
+
+### Quick Setup Block
+
+```bash
+npm install -g acpx@latest
+npx acpx@latest --skill install acpx
+# Read https://raw.githubusercontent.com/openclaw/acpx/main/skills/acpx/SKILL.md
+```
+
+### Usage Examples
+
+```bash
+acpx codex sessions new
+acpx codex 'fix the tests'
+acpx codex --file prompt.md
+acpx codex --no-wait 'draft test migration plan'
+acpx codex cancel
+acpx codex set-mode auto
+```
+
+### Named Sessions
+
+```bash
+acpx codex sessions new --name api
+acpx codex -s api 'implement token pagination'
+acpx codex sessions new --name docs
+acpx codex -s docs 'rewrite API docs'
+```
+
+### Exec Mode
+
+```bash
+acpx exec 'summarize this repo'
+acpx codex exec 'what does this repo do?'
+```
+
+## Skill vs Full CLI Reference
+
+| Document                  | Audience | Purpose                                    |
+|---------------------------|----------|--------------------------------------------||
+| `skills/acpx/SKILL.md`    | Agents   | Quick reference for agent-to-agent use     |
+| `docs/CLI.md`             | Humans   | Complete command grammar and options       |
+| `README.md`               | Humans   | Install, quickstart, practical examples    |
+
+Agents should read the skill first, then consult CLI.md for details.
+
+## Teaching Agents About acpx
+
+### Minimal Prompt
+
+```text
+Read the acpx skill:
+https://raw.githubusercontent.com/openclaw/acpx/main/skills/acpx/SKILL.md
+
+From now on, use acpx to delegate coding tasks:
+  acpx codex "fix the tests"
+  acpx claude "refactor auth"
+```
+
+### Extended Prompt (with Installation)
+
+See "Teaching an Agent" section above for the full installation + skill reading prompt from the README.
+
+## Practical Agent Workflows
+
+From `skills/acpx/SKILL.md` practical workflows section:
+
+### Persistent Repo Assistant
+
+```bash
+acpx codex 'inspect failing tests and propose a fix plan'
+acpx codex 'apply the smallest safe fix and run tests'
+```
+
+### Parallel Named Streams
+
+```bash
+acpx codex -s backend 'fix API pagination bug'
+acpx codex -s docs 'draft changelog entry for release'
+```
+
+### Queue Follow-Up
+
+```bash
+acpx codex 'run full test suite and investigate failures'
+acpx codex --no-wait 'after tests, summarize root causes'
+```
+
+### One-Shot Script Step
+
+```bash
+acpx --format quiet exec 'summarize repo purpose in 3 lines'
+```
+
+### Machine-Readable Automation
+
+```bash
+acpx --format json codex 'review current branch changes' > events.ndjson
+```
+
+### Custom Adapter
+
+```bash
+acpx --agent './bin/custom-acp-server --profile ci' 'run validation'
+```
+
+### Permissive Mode for PR Review
+
+```bash
+acpx --cwd ~/repos/shop --approve-all codex -s pr-842 \
+  'review PR #842 for regressions and propose minimal patch'
+```
+
+## Updating the Skill
+
+When acpx changes:
+
+1. **Update `skills/acpx/SKILL.md`**: Keep it in sync with new features
+2. **Update harness-specific docs**: Also update `agents/README.md` and individual harness docs
+3. **Test skill accuracy**: Ensure examples work with current acpx version
+
+From `AGENTS.md` documentation synchronization policy:
+
+> Any PR that adds, removes, renames, or materially changes a built-in harness agent, harness-specific workflow, or harness-facing behavior MUST update `skills/acpx/SKILL.md` in the same change.
+
+## Implementation References
+
+- Skill reference: `skills/acpx/SKILL.md`
+- Setup instructions: `README.md:72` ("Quick setup — tell your agent about acpx")
+- Documentation policy: `AGENTS.md` (harness documentation synchronization)

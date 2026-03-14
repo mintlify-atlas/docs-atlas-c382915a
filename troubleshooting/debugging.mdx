@@ -1,0 +1,697 @@
+---
+title: "Debugging"
+description: "Debug acpx sessions, inspect ACP protocol, and report issues effectively"
+---
+
+## Verbose Logging
+
+The `--verbose` flag enables detailed debugging output for troubleshooting acpx behavior and adapter issues.
+
+### What Verbose Mode Shows
+
+```bash
+acpx --verbose codex "fix the test"
+```
+
+**Output includes:**
+- ACP JSON-RPC messages (inbound and outbound)
+- Agent process spawn details
+- Session creation and loading steps
+- Queue IPC handshakes
+- Adapter stderr output
+- Client operation lifecycle events
+- Permission request/approval flow
+
+<Note>
+  Verbose logs go to **stderr**, so they don't interfere with `--format json` output streams.
+</Note>
+
+### Using Verbose with JSON Format
+
+```bash
+acpx --verbose --format json codex exec "task" 2>debug.log 1>output.ndjson
+```
+
+This separates:
+- `debug.log`: verbose diagnostic logs
+- `output.ndjson`: clean ACP JSON-RPC stream
+
+### Common Verbose Use Cases
+
+<AccordionGroup>
+  <Accordion title="Debugging adapter startup failures">
+    ```bash
+    acpx --verbose codex "test"
+    ```
+
+    Look for:
+    - Spawn command and arguments
+    - Adapter stderr (auth errors, missing dependencies)
+    - ACP handshake messages
+    - `session/new` or `session/load` responses
+  </Accordion>
+
+  <Accordion title="Tracing permission denials">
+    ```bash
+    acpx --verbose --approve-reads codex "read files and suggest changes"
+    ```
+
+    Look for:
+    - Client method calls (`fs/read_text_file`, `terminal/create`)
+    - Permission approval/denial decisions
+    - Policy mode (`approve-reads`, `approve-all`, `deny-all`)
+  </Accordion>
+
+  <Accordion title="Inspecting queue behavior">
+    ```bash
+    # Terminal 1: Start queue owner
+    acpx --verbose --ttl 0 codex "first prompt"
+
+    # Terminal 2: Queue another prompt
+    acpx --verbose codex "second prompt"
+    ```
+
+    Look for:
+    - Queue owner lease detection
+    - IPC connection handshake
+    - Queue request/response messages
+    - Prompt drain sequence
+  </Accordion>
+
+  <Accordion title="Debugging session routing">
+    ```bash
+    acpx --verbose codex "prompt"
+    ```
+
+    Look for:
+    - Git root detection
+    - Directory walk sequence
+    - Session scope matching `(agentCommand, dir, name?)`
+    - Auto-resume vs. session/new decision
+  </Accordion>
+</AccordionGroup>
+
+## Inspecting Session Metadata
+
+Session records are stored as JSON files in `~/.acpx/sessions/`. Each record contains the full session state.
+
+### View Session Metadata
+
+```bash
+# Human-readable format
+acpx codex sessions show
+
+# JSON format for scripting
+acpx --format json codex sessions show | jq
+```
+
+**Key Fields:**
+
+| Field | Description |
+| --- | --- |
+| `acpxRecordId` | Local session identifier (UUID) |
+| `acpSessionId` | ACP protocol session ID |
+| `agentSessionId` | Provider-native session ID (if exposed) |
+| `agentCommand` | Resolved agent command |
+| `cwd` | Session working directory |
+| `name` | Optional named session identifier |
+| `createdAt` | ISO 8601 timestamp |
+| `lastUsedAt` | Last prompt timestamp |
+| `closed` | Whether session is soft-closed |
+| `pid` | Current agent process PID |
+| `lastPromptAt` | Last prompt start time |
+| `lastAgentExitCode` | Exit code if crashed |
+| `lastAgentExitSignal` | Signal if killed |
+| `messages` | Full turn history |
+| `cumulative_token_usage` | Total token counts |
+| `acpx.current_mode_id` | Current mode from `set-mode` |
+
+### Inspect Turn History
+
+```bash
+# Default: last 20 turns
+acpx codex sessions history
+
+# Specific limit
+acpx codex sessions history --limit 50
+
+# JSON format
+acpx --format json codex sessions history | jq '.entries[] | {timestamp, role, preview: .textPreview}'
+```
+
+**History Entry Format:**
+```
+2026-03-14T10:23:45.678Z  user   fix the failing test in checkout.ts
+2026-03-14T10:24:12.123Z  assistant   [thinking] Investigating test suite for...
+```
+
+### Manual File Inspection
+
+```bash
+# List all session files
+ls -lh ~/.acpx/sessions/
+
+# Pretty-print a session record
+cat ~/.acpx/sessions/<session-id>.json | jq
+
+# Extract specific fields
+cat ~/.acpx/sessions/<session-id>.json | jq '{
+  id: .acpxRecordId,
+  agent: .agentCommand,
+  cwd: .cwd,
+  pid: .pid,
+  closed: .closed,
+  messageCount: (.messages | length)
+}'
+```
+
+<Warning>
+  Do not manually edit session files. Corruption will break session loading. Use `sessions new` to create fresh sessions instead.
+</Warning>
+
+## Queue and Process Debugging
+
+### Check Session Status
+
+```bash
+acpx codex status
+```
+
+**Possible States:**
+
+<Tabs>
+  <Tab title="running">
+    ```
+    Status: running
+    Session ID: 019c...
+    Agent: codex
+    PID: 12345
+    Uptime: 5m 23s
+    Last prompt: 2026-03-14T10:23:45.678Z
+    ```
+
+    Process is alive and session is active.
+  </Tab>
+  <Tab title="dead">
+    ```
+    Status: dead
+    Session ID: 019c...
+    Agent: codex
+    Last PID: 12345
+    Exit code: 1
+    Exited at: 2026-03-14T10:28:12.345Z
+    ```
+
+    Process crashed or was killed. Next prompt will auto-recover.
+  </Tab>
+  <Tab title="no-session">
+    ```
+    Status: no-session
+    No session found for scope (codex, /path/to/repo)
+    ```
+
+    No session exists for this scope. Run `sessions new` to create one.
+  </Tab>
+</Tabs>
+
+### Find Running Processes
+
+```bash
+# Find acpx processes
+ps aux | grep acpx
+
+# Find adapter processes
+ps aux | grep codex-acp
+ps aux | grep pi-acp
+ps aux | grep openclaw
+
+# See process tree
+pstree -p $(pgrep -f acpx)
+```
+
+### Inspect Queue Lease Files
+
+Queue owners write lease files to claim session ownership:
+
+```bash
+ls -lh ~/.acpx/sessions/*.lease
+```
+
+**Lease File Format:**
+```json
+{
+  "sessionRecordId": "019c...",
+  "ownerPid": 12345,
+  "generation": 1,
+  "createdAt": "2026-03-14T10:23:45.678Z"
+}
+```
+
+**Debugging Lease Conflicts:**
+
+<Steps>
+  <Step title="Check active lease">
+    ```bash
+    cat ~/.acpx/sessions/<session-id>.lease | jq
+    ```
+  </Step>
+  <Step title="Verify owner process is alive">
+    ```bash
+    kill -0 <ownerPid> && echo "alive" || echo "dead"
+    ```
+  </Step>
+  <Step title="Force clean stale lease">
+    If PID is dead but lease remains:
+    ```bash
+    rm ~/.acpx/sessions/<session-id>.lease
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Only remove `.lease` files if you're certain the owner PID is dead. Removing an active lease can cause queue conflicts.
+</Warning>
+
+### Queue IPC Debugging
+
+Queue communication uses Unix domain sockets:
+
+```bash
+# Find queue sockets
+lsof -U | grep acpx
+
+# With verbose flag, see IPC messages
+acpx --verbose codex "prompt"
+```
+
+**Queue Error Detail Codes:**
+
+| Code | Meaning |
+| --- | --- |
+| `QUEUE_OWNER_CLOSED` | Owner finished and shut down cleanly |
+| `QUEUE_OWNER_SHUTTING_DOWN` | Owner hit TTL during active request |
+| `QUEUE_OWNER_OVERLOADED` | Too many queued requests |
+| `QUEUE_OWNER_GENERATION_MISMATCH` | Lease generation changed (owner restarted) |
+| `QUEUE_REQUEST_INVALID` | Malformed queue request |
+| `QUEUE_ACK_MISSING` | No acknowledgment received |
+| `QUEUE_DISCONNECTED_BEFORE_ACK` | Socket closed before ack |
+| `QUEUE_DISCONNECTED_BEFORE_COMPLETION` | Socket closed mid-execution |
+| `QUEUE_PROTOCOL_INVALID_JSON` | Invalid JSON in queue message |
+
+These codes appear in `--format json` error events:
+
+```json
+{
+  "type": "error",
+  "code": "RUNTIME",
+  "detailCode": "QUEUE_OWNER_SHUTTING_DOWN",
+  "origin": "queue",
+  "message": "..."
+}
+```
+
+## ACP Protocol Inspection
+
+### Raw ACP Message Stream
+
+```bash
+# JSON format shows raw ACP JSON-RPC
+acpx --format json codex exec "task" | jq
+```
+
+**Example Messages:**
+
+<CodeGroup>
+  ```json Request
+  {
+    "jsonrpc": "2.0",
+    "id": "req-1",
+    "method": "session/prompt",
+    "params": {
+      "sessionId": "019c...",
+      "prompt": "fix the test"
+    }
+  }
+  ```
+
+  ```json Notification
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+        "type": "text",
+        "text": "Investigating test suite..."
+      }
+    }
+  }
+  ```
+
+  ```json Response
+  {
+    "jsonrpc": "2.0",
+    "id": "req-1",
+    "result": {
+      "stopReason": "end_turn",
+      "tokenUsage": {
+        "input_tokens": 1234,
+        "output_tokens": 567
+      }
+    }
+  }
+  ```
+
+  ```json Error
+  {
+    "jsonrpc": "2.0",
+    "id": "req-1",
+    "error": {
+      "code": -32002,
+      "message": "Resource not found: session abc123"
+    }
+  }
+  ```
+</CodeGroup>
+
+### Filter ACP Messages
+
+```bash
+# Only tool calls
+acpx --format json codex exec "task" | jq -c 'select(.params.sessionUpdate == "tool_call")'
+
+# Only thinking blocks
+acpx --format json codex exec "task" | jq -c 'select(.params.content.type == "thinking")'
+
+# Extract assistant text
+acpx --format json codex exec "task" | jq -r 'select(.params.sessionUpdate == "agent_message_chunk" and .params.content.type == "text") | .params.content.text'
+
+# Count token usage
+acpx --format json codex exec "task" | jq -s 'map(select(.result.tokenUsage)) | map(.result.tokenUsage) | add'
+```
+
+### Trace Client Operations
+
+With `--verbose`, client operations (fs/terminal methods) are logged:
+
+```
+[client] fs/read_text_file: src/test.ts (running)
+[client] fs/read_text_file: src/test.ts (completed)
+```
+
+**Client Operation Methods:**
+- `fs/read_text_file`
+- `fs/write_text_file`
+- `terminal/create`
+- `terminal/output`
+- `terminal/wait_for_exit`
+- `terminal/kill`
+- `terminal/release`
+
+## Exit Codes
+
+Exit codes indicate how acpx completed:
+
+| Code | Name | Meaning |
+| --- | --- | --- |
+| `0` | `SUCCESS` | Normal completion |
+| `1` | `ERROR` | Agent/protocol/runtime error |
+| `2` | `USAGE` | CLI usage error (invalid flags, args) |
+| `3` | `TIMEOUT` | Operation timed out |
+| `4` | `NO_SESSION` | No session found for scope |
+| `5` | `PERMISSION_DENIED` | Permission denied (at least one denied, none approved) |
+| `130` | `INTERRUPTED` | Interrupted by `SIGINT`/`SIGTERM` |
+
+### Check Exit Code
+
+```bash
+acpx codex "task"
+echo $?
+```
+
+### Exit Code in Scripts
+
+```bash
+#!/bin/bash
+set -e
+
+if ! acpx codex sessions ensure; then
+  echo "Failed to create session" >&2
+  exit 1
+fi
+
+if acpx codex "fix the tests"; then
+  echo "Tests fixed successfully"
+else
+  code=$?
+  case $code in
+    3)
+      echo "Timeout - task took too long" >&2
+      ;;
+    4)
+      echo "No session - run 'acpx codex sessions new'" >&2
+      ;;
+    5)
+      echo "Permission denied - use --approve-all" >&2
+      ;;
+    *)
+      echo "Unknown error: $code" >&2
+      ;;
+  esac
+  exit $code
+fi
+```
+
+## Reporting Bugs
+
+When reporting issues, follow these guidelines to help maintainers reproduce and fix problems quickly.
+
+### Required Information
+
+<Steps>
+  <Step title="Environment details">
+    ```bash
+    # Node version
+    node --version
+
+    # acpx version
+    npx acpx --version
+    # or
+    npm list -g acpx
+
+    # OS and platform
+    uname -a
+    ```
+  </Step>
+  <Step title="Reproduction steps">
+    Provide the **exact command** that fails:
+    ```bash
+    acpx --verbose codex "your prompt here"
+    ```
+
+    Include:
+    - Full command with all flags
+    - Working directory context (git repo, non-repo, etc.)
+    - Whether it's a fresh session or existing one
+  </Step>
+  <Step title="Verbose output">
+    Capture full output:
+    ```bash
+    acpx --verbose codex "task" 2>debug.log
+    ```
+
+    Include `debug.log` with your report (redact sensitive info).
+  </Step>
+  <Step title="Session metadata (if relevant)">
+    ```bash
+    acpx codex status
+    acpx --format json codex sessions show | jq
+    ```
+
+    Redact sensitive paths or IDs before sharing.
+  </Step>
+  <Step title="Expected vs. actual behavior">
+    - What did you expect to happen?
+    - What actually happened?
+    - Error messages or exit codes
+  </Step>
+</Steps>
+
+### Issue Reporting Guidelines
+
+<Note>
+  For acpx issues, report to: [https://github.com/openclaw/acpx/issues](https://github.com/openclaw/acpx/issues)
+</Note>
+
+**Title Format:**
+```
+[component] Brief description
+```
+
+Examples:
+- `[sessions] Auto-resume picks wrong directory in monorepo`
+- `[queue] TTL expires during long prompts`
+- `[cli] --timeout flag ignored for set-mode command`
+
+**Body Template:**
+
+````markdown
+## Environment
+- acpx version: 0.x.y
+- Node version: 22.12.0
+- OS: macOS 14.2 / Ubuntu 22.04 / etc.
+- Agent: codex / pi / openclaw / etc.
+
+## Reproduction
+
+1. Create session: `acpx codex sessions new`
+2. Run prompt: `acpx --verbose codex "task"`
+3. Observe error: ...
+
+**Minimal example:**
+```bash
+acpx --verbose codex "fix the test"
+```
+
+## Expected Behavior
+Should complete successfully and apply the fix.
+
+## Actual Behavior
+Fails with exit code 3 and timeout error.
+
+## Logs
+<details>
+<summary>Verbose output</summary>
+
+```
+[paste verbose output here]
+```
+</details>
+
+## Additional Context
+- Happens consistently / intermittently
+- Started after upgrading from version X
+- Only occurs with specific agent
+````
+
+### Adapter vs. acpx Issues
+
+Distinguish between acpx bugs and adapter bugs:
+
+| acpx Issues | Adapter Issues |
+| --- | --- |
+| Session routing/matching | Agent crashes on startup |
+| Queue IPC failures | Authentication errors |
+| Config parsing errors | Provider API errors |
+| Exit code mapping | Unsupported ACP methods |
+| TTL/timeout behavior | Slow response times |
+
+**If the issue is adapter-specific:**
+1. Test with a different agent (`pi`, `codex`, etc.)
+2. If only one agent fails, report to the adapter maintainer:
+   - `pi-acp`: [https://github.com/svkozak/pi-acp](https://github.com/svkozak/pi-acp)
+   - `codex-acp`: [https://github.com/zed-industries/codex-acp](https://github.com/zed-industries/codex-acp)
+   - `openclaw`: [https://github.com/openclaw/openclaw](https://github.com/openclaw/openclaw)
+
+### Security Issues
+
+<Warning>
+  **Do not report security vulnerabilities in public issues.**
+</Warning>
+
+For security concerns, email: **security@openclaw.ai**
+
+Include:
+1. **Title**
+2. **Severity Assessment**
+3. **Impact**
+4. **Affected Component**
+5. **Technical Reproduction**
+6. **Demonstrated Impact**
+7. **Environment**
+8. **Remediation Advice**
+
+See [CONTRIBUTING.md](https://github.com/openclaw/acpx/blob/main/CONTRIBUTING.md#report-a-vulnerability) for full security reporting guidelines.
+
+## Advanced Debugging Techniques
+
+### Trace System Calls
+
+On Linux, use `strace` to see what acpx and adapters are doing:
+
+```bash
+strace -f acpx codex "task" 2>strace.log
+```
+
+Useful for:
+- File access issues (EACCES, ENOENT)
+- Socket communication failures
+- Process spawn problems
+
+### Capture Network Traffic (for remote adapters)
+
+If your adapter connects to a remote API:
+
+```bash
+# tcpdump (requires root)
+sudo tcpdump -i any -w capture.pcap host api.example.com
+
+# mitmproxy for HTTPS inspection
+mitmproxy --mode reverse:https://api.example.com@443
+export HTTPS_PROXY=http://localhost:8080
+acpx codex "task"
+```
+
+<Warning>
+  Be careful with credentials when inspecting network traffic.
+</Warning>
+
+### Inspect Event Log Segments
+
+Session event logs are written to segmented files:
+
+```bash
+# List event log segments
+ls -lh ~/.acpx/sessions/<session-id>-events/
+
+# Read active segment
+cat ~/.acpx/sessions/<session-id>-events/active.ndjson | jq
+
+# Read archived segment
+cat ~/.acpx/sessions/<session-id>-events/segment-001.ndjson | jq
+```
+
+**Event Log Metadata:**
+```json
+{
+  "active_path": "/home/user/.acpx/sessions/<id>-events/active.ndjson",
+  "segment_count": 3,
+  "max_segment_bytes": 10485760,
+  "max_segments": 100,
+  "last_write_at": "2026-03-14T10:23:45.678Z"
+}
+```
+
+### Performance Profiling
+
+For performance issues, enable metrics:
+
+```bash
+# Run task with verbose logging
+acpx --verbose codex "task" 2>perf.log
+
+# Extract timing information
+grep -E 'ms|elapsed|duration' perf.log
+```
+
+Look for:
+- Slow startup (adapter spawn time)
+- Long `session/new` or `session/load` calls
+- High token counts (check `cumulative_token_usage`)
+
+## See Also
+
+- [Common Issues](/troubleshooting/common-issues) - Solutions to frequent problems
+- [CLI Reference](/cli/overview) - Complete flag and command documentation
+- [Exit Codes](/cli/overview#exit-codes) - Full exit code reference
+- [Error Strategy](https://github.com/openclaw/acpx/blob/main/docs/ACPX_ERROR_STRATEGY.md) - Internal error handling design

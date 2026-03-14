@@ -1,0 +1,358 @@
+---
+title: Output Formats
+description: Control how acpx formats command output for humans and machines
+---
+
+acpx supports three output formats: `text` (human-readable), `json` (machine-readable), and `quiet` (assistant text only). Choose the format that matches your use case.
+
+## Available Formats
+
+<ParamField path="--format" type="enum" default="text">
+  Output format for command results
+  
+  **Values:**
+  - `text` - Human-readable stream with tool updates (default)
+  - `json` - Raw ACP NDJSON stream for automation
+  - `quiet` - Assistant text only
+</ParamField>
+
+## Text Format (Default)
+
+The default format is designed for human readability and interactive use.
+
+**Features:**
+- Color-coded status indicators (when TTY is detected)
+- Structured sections: `[thinking]`, `[tool]`, `[client]`, `[done]`
+- Tool execution summaries with input/output
+- Real-time streaming output
+
+**Example:**
+```bash
+acpx codex 'find the flaky test and fix it'
+```
+
+**Output:**
+```
+[thinking] Investigating test suite for flaky failures
+
+[tool] Run npm test -- --reporter=verbose (running)
+[tool] Run npm test -- --reporter=verbose (completed)
+  output:
+    ✓ auth.login (0.8s)
+    ✗ checkout.submit (timed out after 5000ms)
+    ✓ cart.add (0.3s)
+
+[thinking] Found it — checkout.submit has a race condition in the async setup
+
+[tool] Edit src/checkout.test.ts (completed)
+  output:
+    Success. Updated 1 file.
+
+[tool] Run npm test -- checkout.submit (completed)
+  output:
+    ✓ checkout.submit (0.4s)
+
+Fixed: added `await` to the setup hook in checkout.submit. The test was
+reading stale state from the previous run.
+
+[done] end_turn
+```
+
+### Text Format Sections
+
+| Section | Description | Example |
+|---------|-------------|----------|
+| `[thinking]` | Agent reasoning (truncated to 900 chars) | `[thinking] Analyzing test failures` |
+| `[tool]` | Tool execution status and results | `[tool] Read src/auth.ts (completed)` |
+| `[client]` | Client operation logs | `[client] session/load (completed)` |
+| `[plan]` | Multi-step plan updates | `[plan]` with status indicators |
+| `[done]` | Stop reason | `[done] end_turn` |
+
+## JSON Format
+
+JSON format outputs raw ACP JSON-RPC messages as NDJSON (newline-delimited JSON), one message per line.
+
+**When to use:**
+- Automation and scripting
+- Integration with other tools
+- Programmatic analysis of agent behavior
+- Building custom UIs or dashboards
+
+**Example:**
+```bash
+acpx --format json codex exec 'review latest diff for security issues'
+```
+
+**Output:**
+```json
+{"jsonrpc":"2.0","id":"req-1","method":"session/prompt","params":{"sessionId":"019c...","prompt":"hi"}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}}
+{"jsonrpc":"2.0","id":"req-1","result":{"stopReason":"end_turn"}}
+```
+
+### JSON Format Guarantees
+
+<Note>
+  The JSON output is **raw ACP protocol traffic**. There are no acpx-specific wrappers, synthetic fields, or key renaming.
+</Note>
+
+**Hard rules:**
+- No acpx-specific event envelope
+- No synthetic `type` or `stream` wrapper fields
+- No ACP payload key renaming
+- Pure JSON-RPC 2.0 messages
+
+### JSON Strict Mode
+
+<ParamField path="--json-strict" type="boolean">
+  Strict JSON mode (requires `--format json`)
+  
+  Suppresses non-JSON stderr output for machine-safe parsing.
+</ParamField>
+
+**Example:**
+```bash
+acpx --format json --json-strict codex exec 'analyze test coverage'
+```
+
+**Behavior:**
+- Suppresses all non-JSON stderr output
+- Cannot be combined with `--verbose`
+- Guarantees every line is valid JSON
+
+<Warning>
+  `--json-strict` requires `--format json` and cannot be used with `--verbose`.
+</Warning>
+
+### Processing JSON Output
+
+Use `jq` to filter and transform the NDJSON stream:
+
+```bash
+# Extract tool call statuses
+acpx --format json codex exec 'review this PR' \
+  | jq -r 'select(.method=="session/update" and .params.update.sessionUpdate=="tool_call") | [.params.update.status, .params.update.title] | @tsv'
+
+# Count message types
+acpx --format json codex exec 'summarize changes' \
+  | jq -s 'group_by(.method) | map({method: .[0].method, count: length})'
+
+# Extract assistant text chunks
+acpx --format json codex exec 'explain this code' \
+  | jq -r 'select(.method=="session/update" and .params.update.sessionUpdate=="agent_message_chunk") | .params.update.content.text' \
+  | tr -d '\n'
+```
+
+## Quiet Format
+
+Quiet format outputs only the final assistant text, with no status indicators, tool logs, or metadata.
+
+**When to use:**
+- Scripting where you only need the final answer
+- Piping agent output to other commands
+- Minimal, distraction-free output
+
+**Example:**
+```bash
+acpx --format quiet codex 'give me a 3-line summary of this repo'
+```
+
+**Output:**
+```
+This is an ACP client CLI that enables headless agent-to-agent communication.
+It manages persistent sessions, handles permission prompts, and supports multiple agents.
+Key features include session queueing, cooperative cancellation, and structured JSON output.
+```
+
+**No other output:**
+- No `[thinking]` or `[tool]` logs
+- No `[done]` indicator
+- Just the assistant's final text
+
+### Quiet Format in Pipelines
+
+```bash
+# Use agent output as input to another command
+acpx --format quiet codex 'list all TODO items in src/' | grep 'URGENT'
+
+# Generate commit messages
+git diff | acpx --format quiet codex exec 'write a commit message for this diff'
+
+# Summarize logs
+tail -100 app.log | acpx --format quiet codex exec 'summarize these errors'
+```
+
+## Session and Query Commands
+
+When `--format json` is used with session management commands, the output is local JSON (not ACP traffic).
+
+### sessions list
+
+**Text format:**
+```bash
+acpx codex sessions list
+```
+```
+ses_abc123  default  /home/user/project  2026-03-14T10:30:00Z
+ses_def456  backend  /home/user/project  2026-03-14T09:15:00Z [closed]
+```
+
+**JSON format:**
+```bash
+acpx --format json codex sessions list
+```
+```json
+[
+  {
+    "id": "ses_abc123",
+    "name": null,
+    "cwd": "/home/user/project",
+    "lastUsedAt": "2026-03-14T10:30:00Z",
+    "closed": false
+  },
+  {
+    "id": "ses_def456",
+    "name": "backend",
+    "cwd": "/home/user/project",
+    "lastUsedAt": "2026-03-14T09:15:00Z",
+    "closed": true
+  }
+]
+```
+
+**Quiet format:**
+```bash
+acpx --format quiet codex sessions list
+```
+```
+ses_abc123
+ses_def456 [closed]
+```
+
+### sessions show
+
+**Text format:**
+```bash
+acpx codex sessions show
+```
+```
+id: ses_abc123
+name: (default)
+cwd: /home/user/project
+agentCommand: npx @zed-industries/codex-acp
+createdAt: 2026-03-14T10:00:00Z
+lastUsedAt: 2026-03-14T10:30:00Z
+closed: false
+```
+
+**JSON format:**
+```bash
+acpx --format json codex sessions show
+```
+```json
+{
+  "id": "ses_abc123",
+  "name": null,
+  "cwd": "/home/user/project",
+  "agentCommand": "npx @zed-industries/codex-acp",
+  "createdAt": "2026-03-14T10:00:00Z",
+  "lastUsedAt": "2026-03-14T10:30:00Z",
+  "closed": false,
+  "turns": []
+}
+```
+
+### sessions history
+
+**Text format:**
+```bash
+acpx codex sessions history --limit 5
+```
+```
+2026-03-14T10:30:00Z  user       fix the failing test
+2026-03-14T10:30:15Z  assistant  I'll investigate the test failures...
+2026-03-14T10:25:00Z  user       review the auth module
+2026-03-14T10:25:10Z  assistant  I've reviewed the authentication code...
+```
+
+**JSON format:**
+```bash
+acpx --format json codex sessions history --limit 5
+```
+```json
+{
+  "entries": [
+    {
+      "timestamp": "2026-03-14T10:30:00Z",
+      "role": "user",
+      "textPreview": "fix the failing test"
+    },
+    {
+      "timestamp": "2026-03-14T10:30:15Z",
+      "role": "assistant",
+      "textPreview": "I'll investigate the test failures..."
+    }
+  ]
+}
+```
+
+### status
+
+**Text format:**
+```bash
+acpx codex status
+```
+```
+status: running
+sessionId: ses_abc123
+agentCommand: npx @zed-industries/codex-acp
+pid: 12345
+uptime: 5m 23s
+lastPrompt: 2026-03-14T10:30:00Z
+```
+
+## Practical Examples
+
+### Development Workflow
+
+```bash
+# Interactive development (text format)
+acpx codex 'fix the failing tests'
+
+# Quick answer only
+acpx --format quiet codex 'what does this function do?'
+```
+
+### CI/CD Integration
+
+```bash
+# Machine-readable output for analysis
+acpx --format json --json-strict codex exec 'review this PR' > analysis.ndjson
+
+# Extract specific metrics
+acpx --format json codex exec 'analyze test coverage' \
+  | jq -r 'select(.method=="session/update" and .params.update.sessionUpdate=="agent_message_chunk") | .params.update.content.text'
+```
+
+### Scripting
+
+```bash
+# Generate content for other tools
+SUMMARY=$(acpx --format quiet codex exec 'summarize recent changes')
+echo "$SUMMARY" | mail -s "Daily Summary" team@example.com
+
+# Chain agent calls
+acpx --format quiet codex exec 'list all TODO items' \
+  | acpx --format quiet codex exec 'prioritize these tasks'
+```
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Global Options" icon="flag" href="/cli/global-options">
+    See all command-line flags
+  </Card>
+  <Card title="Exit Codes" icon="door-open" href="/cli/overview#exit-codes">
+    Understand command exit behavior
+  </Card>
+</CardGroup>

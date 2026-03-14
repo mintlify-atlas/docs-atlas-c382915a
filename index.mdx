@@ -1,97 +1,112 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "acpx"
+description: "Headless CLI client for stateful Agent Client Protocol (ACP) sessions"
 ---
 
-## Setting up
+<div className="bg-white rounded-lg border border-[#e0e0e0] p-8 shadow-[0_2px_8px_rgba(0,0,0,0.05)]">
+  <h1 className="text-5xl font-bold text-[#1a1a1a] mb-4">
+    acpx
+  </h1>
+  <p className="text-xl text-[#545454] mb-6">
+    Headless CLI client for the Agent Client Protocol (ACP) — talk to coding agents from the command line without PTY scraping
+  </p>
+  <div className="flex gap-4">
+    <a
+      href="/quickstart"
+      className="inline-block bg-[#94cb04] text-[#1a1a1a] font-bold px-6 py-3 rounded-md hover:opacity-90 transition-opacity"
+    >
+      Get Started
+    </a>
+    <a
+      href="https://github.com/openclaw/acpx"
+      className="inline-block bg-transparent text-[#1a1a1a] font-bold px-6 py-3 border-2 border-[#1a1a1a] hover:bg-[#f5f5f5] transition-colors"
+    >
+      View on GitHub
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## Why acpx?
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+Your agents love acpx! They hate having to scrape characters from a PTY session. `acpx` provides a structured protocol for AI agents and orchestrators to communicate with coding agents over ACP instead of terminal scraping.
 
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Persistent Sessions" icon="clock-rotate-left">
+    Multi-turn conversations that survive across invocations, scoped per repository
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Named Sessions" icon="layer-group">
+    Run parallel workstreams in the same repo with `-s backend` and `-s frontend`
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Prompt Queueing" icon="list">
+    Submit prompts while one is already running — they execute in order automatically
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Structured Output" icon="code">
+    Typed ACP messages (thinking, tool calls, diffs) instead of ANSI scraping
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Quick Example
 
-Everything you need to create world-class documentation.
+```bash
+# Create a session and delegate work to a coding agent
+acpx codex sessions new
+acpx codex "find the flaky test and fix it"
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+# Work in parallel named sessions
+acpx codex -s api "implement token pagination"
+acpx codex -s docs "rewrite API docs"
 
-## Need inspiration?
+# One-shot execution without saved session
+acpx codex exec "summarize this repo"
+```
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Built-in Agent Support" icon="robot" href="/agents/overview">
+    One command surface for Pi, OpenClaw, Codex, Claude, and other ACP-compatible agents
+  </Card>
+  <Card title="Cooperative Cancellation" icon="xmark">
+    `cancel` sends ACP `session/cancel` via queue IPC without tearing down session state
+  </Card>
+  <Card title="Crash Recovery" icon="rotate">
+    Dead agent processes are detected and sessions are reloaded automatically
+  </Card>
+  <Card title="Fire-and-Forget" icon="paper-plane">
+    `--no-wait` queues a prompt and returns immediately for background execution
+  </Card>
+  <Card title="Permission Controls" icon="shield">
+    Fine-grained permission modes with `--approve-all`, `--approve-reads`, or `--deny-all`
+  </Card>
+  <Card title="Multiple Output Formats" icon="terminal" href="/guides/output-formats">
+    Human-readable text, machine-readable JSON, or quiet mode for automation
+  </Card>
+</CardGroup>
+
+## Get Started
+
+<CardGroup cols={3}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install acpx globally or use with npx
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get up and running in 5 minutes
+  </Card>
+  <Card title="CLI Reference" icon="book" href="/cli/overview">
+    Complete command and option reference
+  </Card>
+</CardGroup>
+
+## Supported Agents
+
+acpx works with multiple ACP-compatible coding agents out of the box:
+
+- **Pi** — Pi Coding Agent via pi-acp adapter
+- **OpenClaw** — Native ACP bridge (`openclaw acp`)
+- **Codex** — Codex CLI via codex-acp adapter
+- **Claude** — Claude Code via claude-agent-acp adapter
+- **And more** — Gemini, Cursor, Copilot, and custom agents
+
+<Card title="View All Agents" icon="list" href="/agents/overview">
+  See the complete list of built-in agents and learn how to use custom agents
 </Card>

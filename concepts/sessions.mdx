@@ -1,0 +1,285 @@
+---
+title: Sessions
+description: Understanding session scoping, persistence, and lifecycle in acpx
+---
+
+## What Are Sessions?
+
+Sessions in `acpx` provide persistent, multi-turn conversations with ACP agents. Unlike one-shot `exec` commands, sessions survive across invocations and maintain conversation history.
+
+<Info>
+Session state lives in `~/.acpx/sessions/` regardless of whether you install acpx globally or use it via npx.
+</Info>
+
+## Session Scoping
+
+Each session is uniquely identified by three components:
+
+1. **Agent command**: Which agent is being used (e.g., `codex`, `claude`, `pi`)
+2. **Directory**: The working directory for the session
+3. **Optional name**: Named sessions allow parallel workstreams
+
+### Default Sessions
+
+Without a name, sessions are scoped to the current directory:
+
+```bash
+acpx codex sessions new
+acpx codex "fix the tests"
+acpx codex "now update the docs"
+```
+
+Both prompts use the same default session for the current directory.
+
+### Named Sessions
+
+Named sessions enable parallel work in the same repository:
+
+```bash
+acpx codex sessions new --name backend
+acpx codex sessions new --name docs
+
+acpx codex -s backend "fix checkout timeout"
+acpx codex -s docs "document payment retry behavior"
+```
+
+Each named session maintains its own conversation history and state.
+
+## Directory Walk Behavior
+
+When you run a prompt command, `acpx` finds the appropriate session through **directory walking**:
+
+1. **Detect git root**: Walk up from the current directory to find `.git`
+2. **Walk from cwd to git root**: Check each directory for a matching session
+3. **Match on scope**: Find the first session matching `(agentCommand, dir, name?)`
+4. **Fallback to exact match**: If no git root exists, only check the exact current directory
+
+<Note>
+This directory walk behavior is bounded by git repository roots. Sessions created in subdirectories within a repo can be resumed from anywhere in that repo.
+</Note>
+
+### Example: Directory Walk
+
+```bash
+# In /home/user/repos/shop/
+git rev-parse --show-toplevel
+# → /home/user/repos/shop
+
+acpx codex sessions new
+# Creates session scoped to /home/user/repos/shop
+
+cd src/checkout/
+acpx codex "review this module"
+# Finds the session at /home/user/repos/shop (walks up to git root)
+
+cd /home/user/repos/shop/tests/
+acpx codex "add integration test"
+# Uses the same session (also walks up to git root)
+```
+
+## Session Persistence
+
+Session metadata is stored in `~/.acpx/sessions/` as JSON files:
+
+```typescript
+type SessionRecord = {
+  acpxRecordId: string;        // Unique session ID
+  agentCommand: string;        // Command used to spawn agent
+  cwd: string;                 // Working directory (absolute path)
+  name?: string;               // Optional session name
+  createdAt: string;           // ISO timestamp
+  lastUsedAt: string;          // ISO timestamp
+  closed: boolean;             // Soft-close state
+  closedAt?: string;           // ISO timestamp when closed
+  pid?: number;                // Last known agent process ID
+  // ... conversation history and agent state
+};
+```
+
+Each session includes:
+- Turn history with timestamps and text previews
+- Agent lifecycle state (PID, start time, exit codes)
+- ACP protocol version and capabilities
+- Configuration and mode preferences
+
+## Session Lifecycle
+
+### Creating Sessions
+
+```bash
+# Explicit creation
+acpx codex sessions new
+acpx codex sessions new --name api
+
+# Idempotent creation (get existing or create new)
+acpx codex sessions ensure
+acpx codex sessions ensure --name api
+```
+
+<Warning>
+Prompt commands require an existing session. If no session is found, acpx exits with code 4 and suggests running `sessions new`.
+</Warning>
+
+### Soft-Close Behavior
+
+Sessions use a **soft-close** lifecycle:
+
+```bash
+acpx codex sessions close
+acpx codex sessions close api
+```
+
+When a session is closed:
+- The queue owner process is terminated
+- The agent process is killed if still running
+- The session record is kept on disk with `closed: true`
+- Auto-resume will skip closed sessions
+- History is preserved and can be inspected
+
+<Note>
+Creating a new session in the same scope automatically soft-closes the previous one.
+</Note>
+
+### Crash Recovery
+
+If a saved session's PID is dead on the next prompt:
+
+1. `acpx` respawns the agent process
+2. Attempts `session/load` to restore conversation state
+3. Transparently falls back to `session/new` if loading fails
+
+This ensures sessions are resilient to agent crashes or system restarts.
+
+## Session Commands
+
+### List Sessions
+
+```bash
+acpx codex sessions
+acpx codex sessions list
+```
+
+Shows all saved sessions for the agent command, including:
+- Session ID
+- Name (if any)
+- Working directory
+- Last used timestamp
+- Closed status (marked with `[closed]`)
+
+### Inspect Session
+
+```bash
+acpx codex sessions show
+acpx codex sessions show api
+```
+
+Displays detailed session metadata:
+- Session ID and name
+- Agent command and capabilities
+- Creation and last used timestamps
+- Process state (PID, uptime)
+- Protocol version
+
+### View History
+
+```bash
+acpx codex sessions history
+acpx codex sessions history api --limit 10
+```
+
+Shows recent turn history with:
+- Timestamps
+- Role (user/assistant)
+- Text previews
+
+Default limit: 20 turns
+
+### Check Status
+
+```bash
+acpx codex status
+acpx codex status -s api
+```
+
+Local process status for the current session:
+- `running`, `dead`, or `no-session`
+- Session ID and agent command
+- PID and uptime (when running)
+- Last prompt timestamp
+- Exit code/signal (when dead)
+
+<Info>
+Status checks are local and PID-based using `kill(pid, 0)` semantics. They do not communicate with the agent.
+</Info>
+
+## Working Directory
+
+The `--cwd` flag controls session scoping and routing:
+
+```bash
+# Review code in a different project
+acpx --cwd ~/repos/backend codex "review recent auth changes"
+
+# Create session in specific directory
+acpx --cwd ~/repos/shop codex sessions new --name pr-842
+```
+
+`--cwd` sets:
+- The starting point for directory-walk routing
+- The exact scope directory when creating sessions via `sessions new`
+- The working directory for the agent process
+
+## Practical Examples
+
+### Parallel PR Reviews
+
+```bash
+# Review PR #842 in a dedicated session
+acpx --cwd ~/repos/shop codex sessions new --name pr-842
+acpx --cwd ~/repos/shop codex -s pr-842 \
+  "Review PR #842, list risks, and propose a minimal patch"
+
+# Continue later
+acpx --cwd ~/repos/shop codex -s pr-842 \
+  "Now draft commit message and rollout checklist"
+```
+
+### Multi-Stream Development
+
+```bash
+# Parallel workstreams in one repo
+acpx codex sessions new --name backend
+acpx codex sessions new --name frontend
+acpx codex sessions new --name docs
+
+acpx codex -s backend "implement token pagination"
+acpx codex -s frontend "add pagination UI component"
+acpx codex -s docs "document pagination API"
+```
+
+### Session Management
+
+```bash
+# List all sessions
+acpx codex sessions
+
+# Inspect specific session
+acpx codex sessions show backend
+
+# View recent conversation
+acpx codex sessions history backend --limit 5
+
+# Close when done
+acpx codex sessions close backend
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Queueing" icon="list" href="/concepts/queueing">
+    Learn how prompts are queued when sessions are busy
+  </Card>
+  <Card title="Permissions" icon="shield" href="/concepts/permissions">
+    Understand permission modes and policies
+  </Card>
+</CardGroup>

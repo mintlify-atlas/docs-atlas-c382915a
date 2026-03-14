@@ -1,0 +1,147 @@
+---
+title: Agent Client Protocol (ACP)
+description: Learn about the Agent Client Protocol and why it matters for agent-to-agent communication
+---
+
+## What is ACP?
+
+The **Agent Client Protocol (ACP)** is a structured communication protocol designed for AI agent interactions. Instead of scraping characters from a PTY (pseudo-terminal) session, ACP provides a clean, typed message interface for agent-to-agent communication.
+
+<Info>
+Learn more about the protocol specification at [agentclientprotocol.com](https://agentclientprotocol.com)
+</Info>
+
+## Why ACP Matters
+
+Your agents love acpx! 🤖❤️ They hate having to scrape characters from a PTY session 😤
+
+Traditional approaches to agent communication involve:
+- Spawning terminal processes
+- Parsing ANSI escape codes
+- Scraping unstructured text output
+- Reconstructing state from terminal output
+
+This approach is fragile, error-prone, and difficult to maintain. ACP solves these problems by providing:
+
+### Structured Messages
+
+Instead of parsing terminal output, ACP delivers typed messages:
+
+```bash
+$ acpx codex "find the flaky test and fix it"
+
+[thinking] Investigating test suite for flaky failures
+
+[tool] Run npm test -- --reporter=verbose (running)
+[tool] Run npm test -- --reporter=verbose (completed)
+  output:
+    ✓ auth.login (0.8s)
+    ✗ checkout.submit (timed out after 5000ms)
+    ✓ cart.add (0.3s)
+
+[thinking] Found it — checkout.submit has a race condition in the async setup
+
+[tool] Edit src/checkout.test.ts (completed)
+  output:
+    Success. Updated 1 file.
+
+[done] end_turn
+```
+
+### Key Message Types
+
+ACP messages include:
+
+- **Thinking updates**: Agent reasoning and planning
+- **Tool calls**: Structured tool invocations with status tracking
+- **File diffs**: Clean representations of code changes
+- **Session updates**: State changes and configuration
+- **Client operations**: File system and terminal operations
+
+<Note>
+Every ACP message is a well-formed JSON-RPC 2.0 message, making it easy to parse, log, and analyze agent behavior.
+</Note>
+
+## ACP SDK Integration
+
+`acpx` is built on top of the [ACP SDK](https://www.npmjs.com/package/@agentclientprotocol/sdk), which provides:
+
+- JSON-RPC 2.0 message handling
+- Type-safe protocol implementations
+- Connection lifecycle management
+- Standard client operation handlers
+
+```typescript
+import { AcpClient } from "./client.js";
+
+const client = new AcpClient({
+  agentCommand: "codex",
+  cwd: process.cwd(),
+  permissionMode: "approve-reads",
+  verbose: true
+});
+
+await client.start();
+const session = await client.createSession(cwd);
+const response = await client.prompt(session.sessionId, prompt);
+```
+
+## Supported Agents
+
+`acpx` works with any ACP-compatible agent. Built-in support includes:
+
+| Agent      | Adapter Package                                                |
+| ---------- | -------------------------------------------------------------- |
+| `pi`       | [pi-acp](https://github.com/svkozak/pi-acp)                    |
+| `openclaw` | native (`openclaw acp`)                                        |
+| `codex`    | [codex-acp](https://github.com/zed-industries/codex-acp)       |
+| `claude`   | [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp) |
+| `gemini`   | native (`gemini --acp`)                                        |
+| `cursor`   | native (`cursor-agent acp`)                                    |
+| `copilot`  | native (`copilot --acp --stdio`)                               |
+
+See the [full list of built-in agents](https://github.com/openclaw/acpx#built-in-agents-and-custom-servers) for more.
+
+<Warning>
+Custom ACP servers can be used with the `--agent` flag to specify any executable that speaks ACP over stdio.
+</Warning>
+
+## Output Formats
+
+`acpx` supports multiple output formats:
+
+### Text Format (Default)
+
+Human-readable output with tool status blocks:
+
+```bash
+acpx codex "review this PR"
+```
+
+### JSON Format
+
+Raw ACP JSON-RPC messages for automation:
+
+```bash
+acpx --format json codex exec "review this PR" \
+  | jq -r 'select(.type=="tool_call") | [.status, .title] | @tsv'
+```
+
+### Quiet Format
+
+Assistant text only:
+
+```bash
+acpx --format quiet codex "give me a 3-line summary"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Sessions" icon="database" href="/concepts/sessions">
+    Learn how sessions persist conversations across invocations
+  </Card>
+  <Card title="Queueing" icon="list" href="/concepts/queueing">
+    Understand how acpx queues prompts when sessions are busy
+  </Card>
+</CardGroup>

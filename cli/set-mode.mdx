@@ -1,0 +1,286 @@
+---
+title: set-mode
+description: Set session mode
+---
+
+## Overview
+
+The `set-mode` command calls the ACP `session/set_mode` method to change the session's operating mode.
+
+<Note>
+Mode IDs are **adapter-defined** and not standardized across all ACP adapters. Check your agent's documentation for supported mode values.
+</Note>
+
+## Syntax
+
+```bash
+acpx [global_options] <agent> set-mode <mode> [-s <name>]
+acpx [global_options] set-mode <mode> [-s <name>]  # defaults to codex
+```
+
+## Arguments
+
+<ParamField path="mode" type="string" required>
+  Mode ID to set. Valid values depend on the ACP adapter.
+</ParamField>
+
+## Options
+
+<ParamField path="-s, --session" type="string">
+  Named session to modify. If omitted, modifies the cwd default session.
+</ParamField>
+
+## Behavior
+
+1. Finds the session matching scope `(agentCommand, cwd, name?)`
+2. If no session exists, exits with code `4` and guidance to run `sessions new`
+3. If a queue owner is active (prompt running), routes through queue-owner IPC
+4. If no queue owner is active, reconnects directly to the agent
+5. Calls ACP `session/set_mode` with the specified mode ID
+6. If the agent's session PID is dead, respawns and attempts `session/load`, falling back to `session/new`
+7. Unsupported mode IDs are rejected by the adapter (commonly as `Invalid params`)
+
+## Exit Codes
+
+| Code | Meaning |
+|------|----------|
+| `0` | Success |
+| `1` | Agent/protocol/runtime error |
+| `2` | CLI usage error |
+| `4` | No session found |
+| `130` | Interrupted |
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Create session first
+acpx codex sessions new
+
+# Set mode
+acpx codex set-mode auto
+acpx codex set-mode plan
+acpx codex set-mode execute
+```
+
+### Named Session
+
+```bash
+# Set mode for named session
+acpx codex set-mode planning -s backend
+acpx codex set-mode review -s pr-842
+```
+
+### Default Agent
+
+```bash
+# Uses default agent (codex)
+acpx set-mode auto
+```
+
+### Different Agents
+
+```bash
+# Each agent may have different mode values
+acpx pi set-mode explore
+acpx openclaw set-mode interactive
+acpx claude set-mode focused
+```
+
+## Common Mode Values
+
+<Warning>
+Mode IDs are adapter-specific. These are examples only. Check your agent's documentation.
+</Warning>
+
+### Example Mode IDs (not exhaustive)
+
+- `auto` - Automatic mode selection
+- `plan` - Planning/analysis mode
+- `execute` - Execution mode
+- `review` - Review mode
+- `interactive` - Interactive mode
+- `focused` - Focused/concise responses
+- `verbose` - Detailed responses
+
+## Output Formats
+
+### Text (default)
+
+```bash
+$ acpx codex set-mode plan
+mode set: plan
+```
+
+### JSON
+
+```bash
+$ acpx --format json codex set-mode plan
+{
+  "action": "mode_set",
+  "modeId": "plan",
+  "resumed": false,
+  "acpxRecordId": "01JQWE...",
+  "acpxSessionId": "01JQWF...",
+  "agentSessionId": "agent-123"
+}
+```
+
+### Quiet
+
+```bash
+$ acpx --format quiet codex set-mode plan
+plan
+```
+
+## Error Cases
+
+### No Session Found
+
+```bash
+$ acpx codex set-mode auto
+⚠ No acpx session found (searched up to /home/user/project).
+Create one: acpx codex sessions new
+```
+
+Exit code: `4`
+
+### Invalid Mode ID
+
+```bash
+$ acpx codex set-mode invalid_mode
+Error: Invalid params: unsupported mode 'invalid_mode'
+```
+
+Exit code: `1`
+
+### Empty Mode
+
+```bash
+$ acpx codex set-mode ""
+Error: Mode cannot be empty
+```
+
+Exit code: `2`
+
+## Routing Behavior
+
+### With Active Queue Owner
+
+When a prompt is currently running:
+
+```bash
+# Prompt running
+acpx codex "analyze codebase" &
+
+# set-mode routes through IPC to the active owner
+acpx codex set-mode plan
+```
+
+- No new connection to agent
+- Routes through existing queue owner process
+- Takes effect immediately in the active session
+
+### Without Queue Owner
+
+When no prompt is running:
+
+```bash
+# No active prompt
+acpx codex set-mode plan
+```
+
+- Spawns agent if PID is dead
+- Attempts `session/load` to restore state
+- Falls back to `session/new` if load fails
+- Calls `session/set_mode`
+- Disconnects after completion
+
+## Session Resume
+
+If the agent process died:
+
+```bash
+# Agent crashed or was killed
+# PID is dead
+
+# set-mode auto-resumes
+acpx codex set-mode auto
+```
+
+**Behavior:**
+1. Detects dead PID
+2. Spawns new agent process
+3. Attempts `session/load` with stored ACP session ID
+4. If load succeeds, session state is restored
+5. If load fails, starts fresh `session/new`
+6. Sets mode on restored/new session
+
+## Use Cases
+
+### Switch Between Planning and Execution
+
+```bash
+# Planning phase
+acpx codex set-mode plan
+acpx codex "analyze requirements for new feature"
+
+# Execution phase
+acpx codex set-mode execute
+acpx codex "implement the feature"
+```
+
+### Adjust Response Style
+
+```bash
+# Detailed analysis
+acpx codex set-mode verbose
+acpx codex "explain authentication flow"
+
+# Concise responses
+acpx codex set-mode focused
+acpx codex "summarize changes"
+```
+
+### Per-Session Modes
+
+```bash
+# Different modes for different work streams
+acpx codex set-mode review -s pr-review
+acpx codex set-mode implement -s feature-dev
+acpx codex set-mode explore -s research
+```
+
+### Automation
+
+```bash
+#!/bin/bash
+# Ensure session exists
+acpx codex sessions ensure
+
+# Set appropriate mode
+acpx codex set-mode auto
+
+# Run analysis
+acpx codex "analyze recent commits"
+```
+
+## Verbose Output
+
+With `--verbose` flag:
+
+```bash
+$ acpx --verbose codex set-mode plan
+[acpx] loadSession failed, started fresh session: session not found
+mode set: plan
+```
+
+Shows when session load failed and a fresh session was created.
+
+## See Also
+
+- [set command](/cli/config#set-command) - Set session config options
+- [sessions command](/cli/sessions) - Session management
+- [status command](/cli/status) - Check session status
+- [CLI Overview](/cli/overview) - Full command reference

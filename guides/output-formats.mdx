@@ -1,0 +1,474 @@
+---
+title: Output Formats
+description: Control acpx output formatting for human readability, automation, and scripting
+---
+
+## Overview
+
+acpx supports three output formats to fit different use cases:
+
+- **text** - Human-readable stream with formatted tool updates (default)
+- **json** - Raw ACP JSON-RPC messages for automation
+- **quiet** - Assistant text only, no formatting
+
+Choose the format with the `--format` flag:
+
+```bash
+acpx --format text codex 'review this PR'
+acpx --format json codex exec 'summarize changes'
+acpx --format quiet codex 'give me a one-line summary'
+```
+
+## Text Format (Default)
+
+The text format provides a readable view of what the agent is doing:
+
+```bash
+acpx codex 'fix the failing test'
+```
+
+Output includes:
+
+```
+[thinking] Investigating test suite for flaky failures
+
+[tool] Run npm test -- --reporter=verbose (running)
+[tool] Run npm test -- --reporter=verbose (completed)
+  output:
+    ✓ auth.login (0.8s)
+    ✗ checkout.submit (timed out after 5000ms)
+    ✓ cart.add (0.3s)
+
+[thinking] Found it — checkout.submit has a race condition
+
+[tool] Edit src/checkout.test.ts (completed)
+  output:
+    Success. Updated 1 file.
+
+Fixed: added `await` to the setup hook in checkout.submit.
+
+[done] end_turn
+```
+
+### Text Format Components
+
+<AccordionGroup>
+  <Accordion title="[thinking] - Agent reasoning">
+    Shows the agent's thought process, summarized to ~900 characters:
+
+    ```
+    [thinking] I'll start by running the test suite to identify failures
+    ```
+
+    Helps you understand what the agent is doing.
+  </Accordion>
+  <Accordion title="[tool] - Tool execution">
+    Shows tool calls with status (running/completed/failed):
+
+    ```
+    [tool] Run npm test (completed)
+      input: npm test
+      output:
+        ✓ all tests passed
+    ```
+
+    Includes input, files affected, and output when available.
+  </Accordion>
+  <Accordion title="[client] - Client operations">
+    Shows acpx client operations like permission requests:
+
+    ```
+    [client] Permission request for fs/write (approved)
+      details: Write to src/test.ts
+    ```
+  </Accordion>
+  <Accordion title="Assistant text">
+    The agent's direct response appears without any prefix:
+
+    ```
+    Fixed: added `await` to the setup hook.
+    ```
+
+    This is the agent talking to you directly.
+  </Accordion>
+  <Accordion title="[done] - Completion status">
+    Shows why the turn ended:
+
+    ```
+    [done] end_turn
+    [done] cancelled
+    [done] error
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Color Support
+
+Text format uses ANSI colors when output is to a TTY:
+- Green for completed tools
+- Red for failed tools
+- Yellow for in-progress tools
+- Dimmed text for thinking and done markers
+
+Colors are automatically disabled when piping output.
+
+## JSON Format
+
+JSON format outputs raw ACP JSON-RPC messages, one per line (NDJSON):
+
+```bash
+acpx --format json codex exec 'review changes'
+```
+
+Example output:
+
+```json
+{"jsonrpc":"2.0","id":"req-1","method":"session/prompt","params":{"sessionId":"ses_123","prompt":"review changes"}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"I'll"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":" review"}}}
+{"jsonrpc":"2.0","id":"req-1","result":{"stopReason":"end_turn"}}
+```
+
+<Note>
+  JSON format outputs raw ACP protocol messages - no acpx-specific wrappers or synthetic fields.
+</Note>
+
+### JSON Format Use Cases
+
+<Tabs>
+  <Tab title="Automation">
+    Parse and process agent responses in scripts:
+
+    ```bash
+    acpx --format json codex exec 'review this PR' \
+      | jq -r 'select(.type=="tool_call") | [.status, .title] | @tsv'
+    ```
+  </Tab>
+  <Tab title="Monitoring">
+    Track tool execution and timing:
+
+    ```bash
+    acpx --format json codex 'run tests' \
+      | jq 'select(.method=="session/update") | .params.update'
+    ```
+  </Tab>
+  <Tab title="Logging">
+    Store complete interaction logs:
+
+    ```bash
+    acpx --format json codex 'analyze code' > session.ndjson
+    ```
+  </Tab>
+  <Tab title="Integration">
+    Feed agent output to other tools:
+
+    ```bash
+    acpx --format json codex exec 'get metrics' \
+      | your-processing-tool
+    ```
+  </Tab>
+</Tabs>
+
+### JSON Strict Mode
+
+Use `--json-strict` with `--format json` to suppress non-JSON stderr output:
+
+```bash
+acpx --format json --json-strict codex exec 'review code'
+```
+
+This ensures:
+- Only JSON lines go to stdout
+- Diagnostic messages are suppressed
+- Safe for strict JSON parsers
+
+<Warning>
+  `--json-strict` requires `--format json`. Using it alone is a usage error.
+</Warning>
+
+### Parsing JSON Output with jq
+
+Common jq patterns for acpx JSON output:
+
+<CodeGroup>
+```bash Tool calls only
+# Extract tool execution status
+acpx --format json codex exec 'run tests' \
+  | jq -r 'select(.method=="session/update" and .params.update.sessionUpdate=="tool_call") | .params.update'
+```
+
+```bash Assistant text
+# Collect all assistant message chunks
+acpx --format json codex exec 'summarize code' \
+  | jq -r 'select(.method=="session/update" and .params.update.sessionUpdate=="agent_message_chunk") | .params.update.content.text' \
+  | tr -d '\n'
+```
+
+```bash Stop reason
+# Get the final stop reason
+acpx --format json codex exec 'analyze' \
+  | jq -r 'select(.result.stopReason) | .result.stopReason'
+```
+
+```bash Error detection
+# Detect errors in the stream
+acpx --format json codex 'run task' \
+  | jq 'select(.error) | .error'
+```
+</CodeGroup>
+
+## Quiet Format
+
+Quiet format shows only the final assistant text:
+
+```bash
+acpx --format quiet codex 'give me a 3-line summary of this code'
+```
+
+Output:
+
+```
+This codebase implements an ACP client for running AI coding agents.
+It handles sessions, prompt queueing, and structured output formatting.
+The main entry point is the CLI which dispatches to agent-specific adapters.
+```
+
+All tool execution, thinking, and status markers are hidden.
+
+### Quiet Format Use Cases
+
+<Tabs>
+  <Tab title="Quick answers">
+    Get just the answer without noise:
+
+    ```bash
+    answer=$(acpx --format quiet codex 'what is the main export in index.ts?')
+    echo "Answer: $answer"
+    ```
+  </Tab>
+  <Tab title="Scripting">
+    Use agent output in scripts:
+
+    ```bash
+    summary=$(acpx --format quiet codex exec 'summarize changes in 1 line')
+    git commit -m "$summary"
+    ```
+  </Tab>
+  <Tab title="Piping">
+    Chain agent output to other tools:
+
+    ```bash
+    acpx --format quiet codex 'list all TODO items' \
+      | grep -i urgent \
+      | sort
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Quiet format only shows text after the agent completes. There's no streaming progress indication.
+</Note>
+
+## Format Comparison
+
+| Format | Best For | Shows Tools | Shows Thinking | Streaming | Parseable |
+|--------|----------|-------------|----------------|-----------|----------|
+| text | Interactive use | ✓ | ✓ | ✓ | ✗ |
+| json | Automation | ✓ | ✓ | ✓ | ✓ |
+| quiet | Quick answers | ✗ | ✗ | ✗ | Partial |
+
+## Session Commands and JSON Format
+
+Session control commands output different JSON when using `--format json`:
+
+### sessions list
+
+```bash
+acpx --format json codex sessions list
+```
+
+Outputs a single JSON array:
+
+```json
+[
+  {
+    "id": "ses_abc123",
+    "agentCommand": "codex",
+    "cwd": "/home/user/project",
+    "name": null,
+    "closed": false,
+    "createdAt": "2026-03-14T10:00:00Z",
+    "lastUsedAt": "2026-03-14T10:30:00Z"
+  },
+  {
+    "id": "ses_def456",
+    "agentCommand": "codex",
+    "cwd": "/home/user/api",
+    "name": "backend",
+    "closed": true,
+    "createdAt": "2026-03-14T09:00:00Z",
+    "lastUsedAt": "2026-03-14T09:30:00Z",
+    "closedAt": "2026-03-14T09:45:00Z"
+  }
+]
+```
+
+### sessions show
+
+```bash
+acpx --format json codex sessions show
+```
+
+Outputs the full session record:
+
+```json
+{
+  "id": "ses_abc123",
+  "agentCommand": "codex",
+  "cwd": "/home/user/project",
+  "name": null,
+  "closed": false,
+  "createdAt": "2026-03-14T10:00:00Z",
+  "lastUsedAt": "2026-03-14T10:30:00Z",
+  "turnHistory": [
+    {
+      "role": "user",
+      "timestamp": "2026-03-14T10:30:00Z",
+      "textPreview": "fix the tests"
+    },
+    {
+      "role": "assistant",
+      "timestamp": "2026-03-14T10:31:00Z",
+      "textPreview": "I'll analyze the test suite..."
+    }
+  ]
+}
+```
+
+### sessions history
+
+```bash
+acpx --format json codex sessions history
+```
+
+Outputs turn history:
+
+```json
+{
+  "entries": [
+    {
+      "role": "user",
+      "timestamp": "2026-03-14T10:30:00Z",
+      "textPreview": "fix the tests"
+    },
+    {
+      "role": "assistant",
+      "timestamp": "2026-03-14T10:31:00Z",
+      "textPreview": "I'll analyze the test suite and identify the issue..."
+    }
+  ]
+}
+```
+
+### status
+
+```bash
+acpx --format json codex status
+```
+
+Text output only - no special JSON format for status command yet.
+
+## Configuration
+
+Set a default format in your config file:
+
+```json
+{
+  "format": "text"
+}
+```
+
+CLI flag always overrides:
+
+```bash
+# Even if config sets format: "json"
+acpx --format text codex 'review code'
+```
+
+See the [Configuration Guide](/guides/configuration) for details.
+
+## Examples
+
+### Automation Pipeline
+
+Extract security findings from agent analysis:
+
+```bash
+#!/bin/bash
+
+# Run security review and extract high-severity findings
+acpx --format json codex exec 'review this PR for security issues' \
+  | jq -r 'select(.method=="session/update" and .params.update.sessionUpdate=="agent_message_chunk") | .params.update.content.text' \
+  | tr -d '\n' \
+  | grep -i "high severity" \
+  > security-report.txt
+
+if [ -s security-report.txt ]; then
+  echo "Security issues found!"
+  cat security-report.txt
+  exit 1
+fi
+```
+
+### Summary Script
+
+Get a quick summary without noise:
+
+```bash
+#!/bin/bash
+
+summary=$(acpx --format quiet codex exec 'summarize all TODO comments in one paragraph')
+
+echo "# TODO Summary" > TODO.md
+echo "" >> TODO.md
+echo "$summary" >> TODO.md
+echo "" >> TODO.md
+echo "Generated: $(date)" >> TODO.md
+```
+
+### Monitoring Tool Execution
+
+Track which tools are being used:
+
+```bash
+acpx --format json codex 'fix all lint errors' \
+  | jq -r 'select(.method=="session/update" and .params.update.sessionUpdate=="tool_call") | "[" + .params.update.status + "] " + .params.update.title'
+```
+
+Output:
+
+```
+[in_progress] Run npm run lint
+[completed] Run npm run lint
+[in_progress] Edit src/utils.ts
+[completed] Edit src/utils.ts
+[in_progress] Run npm run lint
+[completed] Run npm run lint
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Set default output format and other preferences
+  </Card>
+  <Card title="Session Management" icon="layers" href="/guides/session-management">
+    Learn about session lifecycle and commands
+  </Card>
+  <Card title="Named Sessions" icon="tags" href="/guides/named-sessions">
+    Run parallel workstreams with different output formats
+  </Card>
+  <Card title="CLI Reference" icon="book" href="/cli/overview">
+    Full command reference and options
+  </Card>
+</CardGroup>

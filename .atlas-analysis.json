@@ -1,0 +1,128 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "acpx",
+  "projectDescription": "Headless CLI client for stateful Agent Client Protocol (ACP) sessions",
+  "theme": "aspen",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/agent-client-protocol",
+              "concepts/sessions",
+              "concepts/queueing",
+              "concepts/permissions"
+            ]
+          },
+          {
+            "group": "Usage Guides",
+            "pages": [
+              "guides/basic-usage",
+              "guides/session-management",
+              "guides/named-sessions",
+              "guides/output-formats",
+              "guides/configuration"
+            ]
+          },
+          {
+            "group": "Built-in Agents",
+            "pages": [
+              "agents/overview",
+              "agents/pi",
+              "agents/openclaw",
+              "agents/codex",
+              "agents/claude",
+              "agents/custom-agents"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "Commands",
+            "pages": [
+              "cli/overview",
+              "cli/prompt",
+              "cli/exec",
+              "cli/sessions",
+              "cli/cancel",
+              "cli/set-mode",
+              "cli/status",
+              "cli/config"
+            ]
+          },
+          {
+            "group": "Options",
+            "pages": [
+              "cli/global-options",
+              "cli/permission-modes",
+              "cli/output-formats"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Advanced",
+        "groups": [
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/queue-behavior",
+              "advanced/crash-recovery",
+              "advanced/agent-skills",
+              "advanced/automation"
+            ]
+          },
+          {
+            "group": "Troubleshooting",
+            "pages": [
+              "troubleshooting/common-issues",
+              "troubleshooting/debugging"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Persistent multi-turn ACP sessions",
+    "Named sessions for parallel workstreams",
+    "Prompt queueing with cooperative cancellation",
+    "Multiple built-in agent support (pi, openclaw, codex, claude)",
+    "Structured JSON output for automation",
+    "Permission management and sandboxing",
+    "Fire-and-forget mode with --no-wait",
+    "Session crash recovery and reconnect"
+  ],
+  "publicApiSurface": [
+    "acpx <agent> prompt",
+    "acpx <agent> exec",
+    "acpx <agent> sessions new",
+    "acpx <agent> sessions list",
+    "acpx <agent> sessions show",
+    "acpx <agent> sessions history",
+    "acpx <agent> sessions close",
+    "acpx <agent> cancel",
+    "acpx <agent> set-mode",
+    "acpx <agent> set",
+    "acpx <agent> status",
+    "acpx config show",
+    "acpx config init"
+  ]
+}
